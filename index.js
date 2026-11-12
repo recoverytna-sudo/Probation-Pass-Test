@@ -38,7 +38,17 @@ const WEBDAV_USER = process.env.WEBDAV_USER;
 const WEBDAV_PASS = process.env.WEBDAV_PASS;
 const WEBDAV_PUBLIC_VIEW_URL = process.env.WEBDAV_PUBLIC_VIEW_URL;
 
-async function fetchProcessSheetData() {
+// Helper: Shuffle array randomly
+function shuffleArray(array) {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+  return array;
+}
+
+// Helper: Fetch and extract random rows from Google Sheets
+async function fetchRandomizedProcessSheetData() {
   try {
     const sheets = google.sheets({ version: 'v4', auth });
     
@@ -63,13 +73,21 @@ async function fetchProcessSheetData() {
     const updateRows = resUpdate.data.values || [];
     const doDontRows = resDoDont.data.values || [];
 
+    // Randomize rows so every exam call gets unique random data
+    const shuffledUpdate = shuffleArray([...updateRows]);
+    const shuffledDoDont = shuffleArray([...doDontRows]);
+
+    // Take a random subset (e.g., up to 60 rows combined) to ensure rich prompt text without overflow
+    const selectedUpdate = shuffledUpdate.slice(0, 35);
+    const selectedDoDont = shuffledDoDont.slice(0, 25);
+
     let combinedText = `=== PROCESS DATA (${firstTabName}) ===\n`;
-    updateRows.forEach(row => combinedText += row.join(' | ') + '\n');
+    selectedUpdate.forEach(row => combinedText += row.join(' | ') + '\n');
     
     combinedText += `\n=== POLICY DATA (${secondTabName}) ===\n`;
-    doDontRows.forEach(row => combinedText += row.join(' | ') + '\n');
+    selectedDoDont.forEach(row => combinedText += row.join(' | ') + '\n');
 
-    return combinedText.substring(0, 15000);
+    return combinedText.substring(0, 8000);
   } catch (err) {
     console.error("Error reading Google Sheets:", err.message);
     throw new Error("Google Sheet မှ ဒေတာဖတ်ယူရာတွင် အမှားအယွင်းရှိနေပါသည်။ Sheet ID နှင့် Sharing Permission ကို စစ်ဆေးပါ။");
@@ -78,22 +96,29 @@ async function fetchProcessSheetData() {
 
 app.get('/api/questions', async (req, res) => {
   try {
-    const sheetDataText = await fetchProcessSheetData();
+    const sheetDataText = await fetchRandomizedProcessSheetData();
     const chatCompletion = await groq.chat.completions.create({
       messages: [
         {
           role: "user",
-          content: `Analyze the following company process and policy data and generate exactly 60 multiple-choice questions in Burmese language. Each question must have exactly 4 options and the zero-based index of the correct answer (0, 1, 2, or 3). Return ONLY a valid JSON array format, with no markdown code blocks or additional text: [{\"id\": 1, \"question\": \"...\", \"options\": [\"A\", \"B\", \"C\", \"D\"], \"answer\": 0}]\n\nCompany Data:\n${sheetDataText}`
+          content: `Analyze the company data and generate exactly 60 multiple-choice questions in Burmese language. Each question must have exactly 4 options and the zero-based index of the correct answer (0, 1, 2, or 3). Return ONLY a valid JSON array format, with no markdown or extra text: [{\"id\": 1, \"question\": \"...\", \"options\": [\"A\", \"B\", \"C\", \"D\"], \"answer\": 0}]\n\nData:\n${sheetDataText}`
         }
       ],
-      model: "openai/gpt-oss-120b", // Correct official Groq model ID for GPT-OSS 120B
-      temperature: 0.5,
+      model: "openai/gpt-oss-120b",
+      temperature: 0.7, // Higher temperature for more varied questions each time
+      max_tokens: 6000,
       reasoning_format: "hidden"
     });
 
     let textResponse = chatCompletion.choices[0]?.message?.content || "";
     textResponse = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
     
+    const firstBracket = textResponse.indexOf('[');
+    const lastBracket = textResponse.lastIndexOf(']');
+    if (firstBracket !== -1 && lastBracket !== -1) {
+      textResponse = textResponse.substring(firstBracket, lastBracket + 1);
+    }
+
     const questions = JSON.parse(textResponse);
     global.cachedQuestions = questions;
 
@@ -165,7 +190,7 @@ app.post('/api/submit-exam', async (req, res) => {
       'Employee Name': employeeName,
       'Employee ID': employeeId,
       'Manager Name': managerName,
-      'Exam Score': `${score} / 60`,
+      'Exam Score': `${score} / ${questions.length}`,
       'Status': 'Pending Manager Feedback'
     };
 
@@ -271,9 +296,9 @@ app.post('/api/submit-feedback', async (req, res) => {
       'Employee Name': empName,
       'Employee ID': empId,
       'Manager Name': mgrName,
-      'Exam Score': `${examScore} / 60`,
+      'Exam Score': `${examScore} Marks`,
       'Feedback Rating': `Rating ${rating} (${feedbackScore} Marks)`,
-      'Total Score': `${totalScore} / 160`,
+      'Total Score': `${totalScore} Marks`,
       'Final Evaluation Result': finalRatingDesc,
       'Status': 'Completed'
     };
