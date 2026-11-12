@@ -4,6 +4,8 @@ const axios = require('axios');
 const Groq = require('groq-sdk');
 const { google } = require('googleapis');
 const PDFDocument = require('pdfkit');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -13,18 +15,30 @@ app.use(express.json());
 // Initialize Groq API
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// Robust Google Sheets Auth Setup (Fixed for OpenSSL / Private Key parsing)
-let privateKey = process.env.GOOGLE_PRIVATE_KEY || '';
-if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
-  privateKey = privateKey.slice(1, -1);
+// Bulletproof Google Sheets Auth Setup using /tmp file (Fixes OpenSSL Decoder Error completely)
+const tempKeyPath = path.join('/tmp', 'sa-key.json');
+try {
+  if (!fs.existsSync(tempKeyPath)) {
+    let privateKey = process.env.GOOGLE_PRIVATE_KEY || '';
+    if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
+      privateKey = privateKey.slice(1, -1);
+    }
+    privateKey = privateKey.replace(/\\n/g, '\n');
+
+    const serviceAccountData = {
+      type: "service_account",
+      project_id: process.env.GOOGLE_PROJECT_ID || "testing-512808",
+      private_key: privateKey,
+      client_email: process.env.GOOGLE_CLIENT_EMAIL,
+    };
+    fs.writeFileSync(tempKeyPath, JSON.stringify(serviceAccountData));
+  }
+} catch (err) {
+  console.error("Error creating temp key file:", err);
 }
-privateKey = privateKey.replace(/\\n/g, '\n');
 
 const auth = new google.auth.GoogleAuth({
-  credentials: {
-    client_email: process.env.GOOGLE_CLIENT_EMAIL,
-    private_key: privateKey,
-  },
+  keyFile: tempKeyPath,
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
