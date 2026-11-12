@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const Groq = require('groq-sdk');
 const { google } = require('googleapis');
 const PDFDocument = require('pdfkit');
 require('dotenv').config();
@@ -10,8 +10,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Initialize Gemini API (Free Tier)
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// Initialize Groq API (Free Tier)
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // Google Sheets Auth Setup
 const auth = new google.auth.GoogleAuth({
@@ -22,8 +22,8 @@ const auth = new google.auth.GoogleAuth({
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
-const PROCESS_SHEET_ID = process.env.PROCESS_GOOGLE_SHEET_ID; // Process & Rules ရှိသော Google Sheet ID
-const DATABASE_SHEET_ID = process.env.DATABASE_GOOGLE_SHEET_ID; // Record သိမ်းမည့် Google Sheet ID
+const PROCESS_SHEET_ID = process.env.PROCESS_GOOGLE_SHEET_ID;
+const DATABASE_SHEET_ID = process.env.DATABASE_GOOGLE_SHEET_ID;
 
 // WebDAV Configuration (ownCloud / Nextcloud for PDF storage)
 const WEBDAV_BASE_URL = process.env.WEBDAV_BASE_URL;
@@ -53,29 +53,31 @@ async function fetchProcessSheetData() {
   combinedText += "\n=== DO & DONT POLICY DATA ===\n";
   doDontRows.forEach(row => combinedText += row.join(' | ') + '\n');
 
-  return combinedText.substring(0, 20000); // Limit text size for AI
+  return combinedText.substring(0, 15000);
 }
 
-// 1. API: Generate 60 Questions using Gemini AI from Google Sheet Data
+// 1. API: Generate 60 Questions using Groq AI from Google Sheet Data
 app.get('/api/questions', async (req, res) => {
   try {
     const sheetDataText = await fetchProcessSheetData();
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
-    const prompt = `You are an examiner. Analyze the following company process and policy data from two sheets ('Update' and 'Do & Dont').
-Generate exactly 60 multiple-choice questions (1 mark each) in Burmese language based on these rules, fines, promotions, and workflows.
-Each question must have exactly 4 options and the zero-based index of the correct answer (0, 1, 2, or 3).
+    // Calling Groq API (Using Llama 3 model)
+    const chatCompletion = await groq.chat.completions.create({
+      messages: [
+        {
+          role: "system",
+          content: "You are an examiner. Analyze the company process and policy data and generate exactly 60 multiple-choice questions in Burmese language. Each question must have exactly 4 options and the zero-based index of the correct answer (0, 1, 2, or 3). Return ONLY a valid JSON array format, with no markdown code blocks or additional text: [{\"id\": 1, \"question\": \"...\", \"options\": [\"A\", \"B\", \"C\", \"D\"], \"answer\": 0}]"
+        },
+        {
+          role: "user",
+          content: `Company Data:\n${sheetDataText}`
+        }
+      ],
+      model: "llama3-70b-8192", // Fast and powerful Groq model
+      temperature: 0.5,
+    });
 
-Return ONLY a valid JSON array format, with no markdown code blocks or additional text:
-[
-  { "id": 1, "question": "...", "options": ["Option A", "Option B", "Option C", "Option D"], "answer": 0 }
-]
-
-Company Data:
-${sheetDataText}`;
-
-    const result = await model.generateContent(prompt);
-    let textResponse = result.response.text();
+    let textResponse = chatCompletion.choices[0]?.message?.content || "";
     textResponse = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
     
     const questions = JSON.parse(textResponse);
@@ -91,7 +93,7 @@ ${sheetDataText}`;
     res.json({ success: true, questions: sanitized });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ success: false, error: "Failed to generate questions from Google Sheet." });
+    res.status(500).json({ success: false, error: "Failed to generate questions using Groq AI." });
   }
 });
 
