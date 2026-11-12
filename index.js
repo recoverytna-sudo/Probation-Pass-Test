@@ -38,7 +38,6 @@ const WEBDAV_USER = process.env.WEBDAV_USER;
 const WEBDAV_PASS = process.env.WEBDAV_PASS;
 const WEBDAV_PUBLIC_VIEW_URL = process.env.WEBDAV_PUBLIC_VIEW_URL;
 
-// Helper: Shuffle array randomly
 function shuffleArray(array) {
   for (let i = array.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -47,8 +46,7 @@ function shuffleArray(array) {
   return array;
 }
 
-// Helper: Fetch and extract random rows from Google Sheets
-async function fetchRandomizedProcessSheetData() {
+async function fetchStrictProcessSheetData() {
   try {
     const sheets = google.sheets({ version: 'v4', auth });
     
@@ -73,13 +71,12 @@ async function fetchRandomizedProcessSheetData() {
     const updateRows = resUpdate.data.values || [];
     const doDontRows = resDoDont.data.values || [];
 
-    // Randomize rows so every exam call gets unique random data
+    // Shuffle and pick random rows to ensure unique questions per exam
     const shuffledUpdate = shuffleArray([...updateRows]);
     const shuffledDoDont = shuffleArray([...doDontRows]);
 
-    // Take a random subset (e.g., up to 60 rows combined) to ensure rich prompt text without overflow
-    const selectedUpdate = shuffledUpdate.slice(0, 35);
-    const selectedDoDont = shuffledDoDont.slice(0, 25);
+    const selectedUpdate = shuffledUpdate.slice(0, 40);
+    const selectedDoDont = shuffledDoDont.slice(0, 30);
 
     let combinedText = `=== PROCESS DATA (${firstTabName}) ===\n`;
     selectedUpdate.forEach(row => combinedText += row.join(' | ') + '\n');
@@ -90,22 +87,26 @@ async function fetchRandomizedProcessSheetData() {
     return combinedText.substring(0, 8000);
   } catch (err) {
     console.error("Error reading Google Sheets:", err.message);
-    throw new Error("Google Sheet မှ ဒေတာဖတ်ယူရာတွင် အမှားအယွင်းရှိနေပါသည်။ Sheet ID နှင့် Sharing Permission ကို စစ်ဆေးပါ။");
+    throw new Error("Google Sheet မှ ဒေတာဖတ်ယူရာတွင် အမှားအယွင်းရှိနေပါသည်။");
   }
 }
 
 app.get('/api/questions', async (req, res) => {
   try {
-    const sheetDataText = await fetchRandomizedProcessSheetData();
+    const sheetDataText = await fetchStrictProcessSheetData();
     const chatCompletion = await groq.chat.completions.create({
       messages: [
         {
+          role: "system",
+          content: "You are a strict questionnaire generator. Using ONLY the exact facts, sentences, and data provided in the text below, create exactly 60 multiple-choice questions. Do NOT invent outside facts or change the original meaning. Formulate the questions as sentence-completion or fill-in-the-blank style based directly on the text. Each question must have 4 options and the zero-based index of the correct answer (0, 1, 2, or 3). Return ONLY a valid JSON array format, with no markdown or extra text: [{\"id\": 1, \"question\": \"...\", \"options\": [\"A\", \"B\", \"C\", \"D\"], \"answer\": 0}]"
+        },
+        {
           role: "user",
-          content: `Analyze the company data and generate exactly 60 multiple-choice questions in Burmese language. Each question must have exactly 4 options and the zero-based index of the correct answer (0, 1, 2, or 3). Return ONLY a valid JSON array format, with no markdown or extra text: [{\"id\": 1, \"question\": \"...\", \"options\": [\"A\", \"B\", \"C\", \"D\"], \"answer\": 0}]\n\nData:\n${sheetDataText}`
+          content: `Source Data:\n${sheetDataText}`
         }
       ],
       model: "openai/gpt-oss-120b",
-      temperature: 0.7, // Higher temperature for more varied questions each time
+      temperature: 0.2, // Low temperature to stick strictly to source data facts
       max_tokens: 6000,
       reasoning_format: "hidden"
     });
@@ -295,7 +296,7 @@ app.post('/api/submit-feedback', async (req, res) => {
       'Submission ID': submissionId,
       'Employee Name': empName,
       'Employee ID': empId,
-      'Manager Name': mgrName,
+      'Manager Name': managerName,
       'Exam Score': `${examScore} Marks`,
       'Feedback Rating': `Rating ${rating} (${feedbackScore} Marks)`,
       'Total Score': `${totalScore} Marks`,
