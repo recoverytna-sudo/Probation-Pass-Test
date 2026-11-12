@@ -1,18 +1,16 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const Groq = require('groq-sdk');
 const { google } = require('googleapis');
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
+const XLSX = require('xlsx');
 require('dotenv').config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 const tempKeyPath = path.join('/tmp', 'sa-key.json');
 try {
@@ -46,116 +44,77 @@ function shuffleArray(array) {
   return array;
 }
 
-async function fetchSheetDataSafe() {
+// Read questions directly from the uploaded Excel/Google Sheet 'Multiple Choose' tab
+async function fetchQuestionsFromExcelSheet() {
   try {
     const sheets = google.sheets({ version: 'v4', auth });
     
-    const spreadsheet = await sheets.spreadsheets.get({
+    // Fetch values from 'Multiple Choose' tab of the PROCESS_SHEET_ID
+    const response = await sheets.spreadsheets.values.get({
       spreadsheetId: PROCESS_SHEET_ID,
-    });
-    
-    const sheetList = spreadsheet.data.sheets;
-    const firstTabName = sheetList[0]?.properties?.title || 'Sheet1';
-    const secondTabName = sheetList[1]?.properties?.title || firstTabName;
-
-    const resUpdate = await sheets.spreadsheets.values.get({
-      spreadsheetId: PROCESS_SHEET_ID,
-      range: `'${firstTabName}'!A:Z`,
-    });
-    
-    const resDoDont = await sheets.spreadsheets.values.get({
-      spreadsheetId: PROCESS_SHEET_ID,
-      range: `'${secondTabName}'!A:Z`,
+      range: "'Multiple Choose'!A:G",
     });
 
-    const updateRows = resUpdate.data.values || [];
-    const doDontRows = resDoDont.data.values || [];
+    const rows = response.data.values || [];
+    if (rows.length <= 1) {
+      throw new Error("Excel Sheet ထဲတွင် မေးခွန်းများ မရှိသေးပါ။");
+    }
 
-    const shuffledUpdate = shuffleArray([...updateRows]);
-    const shuffledDoDont = shuffleArray([...doDontRows]);
+    const header = rows[0]; // ['No', 'Questions', '1', '2', '3', '4', 'Correct Answer']
+    const dataRows = rows.slice(1);
 
-    const selectedUpdate = shuffledUpdate.slice(0, 10);
-    const selectedDoDont = shuffledDoDont.slice(0, 10);
+    // Format rows into question objects
+    let allQuestions = dataRows.map((row, idx) => {
+      const questionText = row[1] || '';
+      const options = [row[2], row[3], row[4], row[5]].filter(opt => opt !== undefined && opt !== '');
+      
+      // Correct answer index (convert 1-4 to 0-3 index)
+      let correctAnsRaw = parseInt(row[6]) - 1;
+      if (isNaN(correctAnsRaw) || correctAnsRaw < 0 || correctAnsRaw >= options.length) {
+        correctAnsRaw = 0;
+      }
 
-    let combinedText = "";
-    selectedUpdate.forEach(row => {
-      const line = row.filter(Boolean).join(' ');
-      if (line) combinedText += line + '\n';
-    });
-    
-    selectedDoDont.forEach(row => {
-      const line = row.filter(Boolean).join(' ');
-      if (line) combinedText += line + '\n';
-    });
+      return {
+        id: idx + 1,
+        question: questionText,
+        options: options,
+        answer: correctAnsRaw
+      };
+    }).filter(q => q.question && q.options.length > 0);
 
-    return combinedText.substring(0, 1500);
+    // Randomize questions every time
+    shuffleArray(allQuestions);
+
+    // Take up to 60 questions (or all available if less than 60)
+    const selectedQuestions = allQuestions.slice(0, 60);
+
+    // Re-index numbering
+    return selectedQuestions.map((q, index) => ({
+      ...q,
+      no: index + 1
+    }));
   } catch (err) {
-    console.error("Error reading Google Sheets:", err.message);
-    return "ကုမ္ပဏီ လုပ်ထုံးလုပ်နည်းနှင့် ပေါ်လစီများ";
+    console.error("Error fetching questions from Sheet:", err.message);
+    throw new Error("Google Sheet မှ မေးခွန်းများ ဖတ်ယူရာတွင် အမှားအယွင်းရှိနေပါသည်။ 'Multiple Choose' Tab နာမည်ကို စစ်ဆေးပါ။");
   }
 }
 
 app.get('/api/questions', async (req, res) => {
   try {
-    const sheetDataText = await fetchSheetDataSafe();
-    
-    let questions = [];
-    try {
-      const chatCompletion = await groq.chat.completions.create({
-        messages: [
-          {
-            role: "system",
-            content: "Create 10 fill-in-the-blank multiple-choice questions in Burmese using the provided text. Replace one key word with '_____'. Return ONLY a valid JSON array format: [{\"id\": 1, \"question\": \"...\", \"options\": [\"A\", \"B\", \"C\", \"D\"], \"answer\": 0}]"
-          },
-          {
-            role: "user",
-            content: sheetDataText || "ကုမ္ပဏီ လုပ်ထုံးလုပ်နည်း စည်းကမ်းချက်များ"
-          }
-        ],
-        model: "openai/gpt-oss-120b",
-        temperature: 0.1,
-        max_tokens: 2000,
-        reasoning_format: "hidden"
-      });
-
-      let textResponse = chatCompletion.choices[0]?.message?.content || "";
-      textResponse = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
-      
-      const firstBracket = textResponse.indexOf('[');
-      const lastBracket = textResponse.lastIndexOf(']');
-      
-      if (firstBracket !== -1 && lastBracket !== -1) {
-        textResponse = textResponse.substring(firstBracket, lastBracket + 1);
-      }
-
-      questions = JSON.parse(textResponse);
-    } catch (aiErr) {
-      console.error("AI Generation Warning, using fallback questions:", aiErr.message);
-    }
-
-    // Fallback if AI fails or returns empty
-    if (!Array.isArray(questions) || questions.length === 0) {
-      questions = [
-        { id: 1, question: "ကုမ္ပဏီ၏ လုပ်ထုံးလုပ်နည်းနှင့် ပေါ်လစီများကို တိကျစွာ _____ ရမည်။", options: ["လိုက်နာ", "ဖျက်သိမ်း", "ကျော်လွန်", "မေ့ထား"], answer: 0 },
-        { id: 2, question: "ဝန်ထမ်းများသည် သတ်မှတ်ထားသော အချိန်ဇယားအတိုင်း _____ ရမည်။", options: ["တက်ရောက်", "ထွက်ခွာ", "အနားယူ", "နောက်ကျ"], answer: 0 },
-        { id: 3, question: "လုပ်ငန်းခွင်အတွင်း စည်းကမ်းများကို _____ စောင့်ထိန်းရမည်။", options: ["တင်းကျပ်စွာ", "ပေါ့ဆစွာ", "ခွင့်ပြုချက်ဖြင့်", "ဆန့်ကျင်၍"], answer: 0 },
-        { id: 4, question: "အထက်လူကြီး၏ ညွှန်ကြားချက်များကို လိုက်နာရန် _____ ရှိသည်။", options: ["တာဝန်", "အခွင့်အရေး", "ကန့်သတ်ချက်", "ဆန္ဒ"], answer: 0 },
-        { id: 5, question: "ကုမ္ပဏီပိုင် ပစ္စည်းများကို ထိန်းသိမ်းရန် _____ ဖြစ်သည်။", options: ["တာဝန်ရှိ", "မလိုလားအပ်", "ခွင့်ပြု", "တားမြစ်"], answer: 0 }
-      ];
-    }
-
+    const questions = await fetchQuestionsFromExcelSheet();
     global.cachedQuestions = questions;
 
-    const sanitized = questions.map((q, idx) => ({
-      no: idx + 1,
-      id: q.id || idx + 1,
+    // Send questions to frontend without revealing correct answers
+    const sanitized = questions.map((q) => ({
+      no: q.no,
+      id: q.id,
       question: q.question,
       options: q.options
     }));
 
     res.json({ success: true, questions: sanitized });
   } catch (err) {
-    console.error("API Error:", err);
+    console.error("Questions API Error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
