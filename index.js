@@ -44,11 +44,9 @@ function shuffleArray(array) {
   return array;
 }
 
-// Fetch questions directly from Google Sheet 'Multiple Choose' tab
 async function fetchQuestionsFromSheet() {
   try {
     const sheets = google.sheets({ version: 'v4', auth });
-    
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: PROCESS_SHEET_ID,
       range: "'Multiple Choose'!A:G",
@@ -60,7 +58,6 @@ async function fetchQuestionsFromSheet() {
     }
 
     const dataRows = rows.slice(1);
-
     let allQuestions = dataRows.map((row, idx) => {
       const questionText = row[1] || '';
       const options = [row[2], row[3], row[4], row[5]].filter(opt => opt !== undefined && opt !== '' && opt !== null);
@@ -116,25 +113,46 @@ app.get('/', (req, res) => {
   res.send('Odoo Probation Exam Backend is running successfully!');
 });
 
-async function createAndUploadPDF(fileName, title, contentData) {
-  const doc = new PDFDocument();
+// Create Detailed PDF with question review and answers
+async function createDetailedExamPDF(subId, employeeName, employeeId, managerName, score, totalQuestions, detailedReview) {
+  const doc = new PDFDocument({ margin: 40 });
   let buffers = [];
   doc.on('data', buffers.push.bind(buffers));
   
-  doc.fontSize(18).text(title, { align: 'center' });
-  doc.moveDown();
-  doc.fontSize(11).text(`Date & Time: ${new Date().toLocaleString()}`);
+  doc.fontSize(20).text('Company Probation Exam Result', { align: 'center' });
+  doc.moveDown(0.5);
+  doc.fontSize(12).text(`Submission ID: ${subId}`, { align: 'center' });
   doc.moveDown();
 
-  for (let key in contentData) {
-    doc.text(`${key}: ${contentData[key]}`);
-  }
+  doc.fontSize(10);
+  doc.text(`Employee Name: ${employeeName}`);
+  doc.text(`Employee ID: ${employeeId}`);
+  doc.text(`Manager Name: ${managerName}`);
+  doc.text(`Date & Time: ${new Date().toLocaleString()}`);
+  doc.text(`Final Exam Score: ${score} / ${totalQuestions}`);
+  doc.moveDown();
+
+  doc.fontSize(14).text('Detailed Question Review:', { underline: true });
+  doc.moveDown(0.5);
+
+  detailedReview.forEach((item, idx) => {
+    doc.fontSize(10).fillColor('#000000').text(`${idx + 1}. ${item.question}`);
+    doc.text(`   - Your Answer: ${item.userAnswerText} ${item.isCorrect ? '(Correct ✓)' : '(Incorrect ✗)'}`, { color: item.isCorrect ? 'green' : 'red' });
+    if (!item.isCorrect) {
+      doc.text(`   - Correct Answer: ${item.correctAnswerText}`, { color: 'green' });
+    }
+    doc.moveDown(0.3);
+  });
+
   doc.end();
 
   return new Promise((resolve, reject) => {
     doc.on('end', async () => {
       try {
         let pdfBuffer = Buffer.concat(buffers);
+        
+        // Upload to WebDAV
+        const fileName = `${subId}_Exam.pdf`;
         const uploadUrl = `${WEBDAV_BASE_URL}/${fileName}`.replace(/([^:]\/)\/+/g, "$1");
 
         await axios.put(uploadUrl, pdfBuffer, {
@@ -143,16 +161,18 @@ async function createAndUploadPDF(fileName, title, contentData) {
         });
 
         const downloadLink = `${WEBDAV_PUBLIC_VIEW_URL}/${fileName}`;
-        resolve(downloadLink);
+        resolve({ pdfBuffer, downloadLink });
       } catch (error) {
-        console.error("WebDAV Upload Error:", error.response?.data || error.message);
-        reject(error);
+        console.error("WebDAV Upload Warning:", error.response?.data || error.message);
+        resolve({ pdfBuffer: Buffer.from([]), downloadLink: "" });
       }
     });
   });
 }
 
-// Universal handler for submitting exam
+// In-memory buffer store for direct download
+global.pdfBufferStore = global.pdfBufferStore = {};
+
 async function handleExamSubmission(req, res) {
   try {
     const { employeeName, employeeId, managerName, answers } = req.body;
@@ -163,26 +183,32 @@ async function handleExamSubmission(req, res) {
     }
 
     let score = 0;
-    if (answers) {
-      questions.forEach(q => {
-        const userAns = answers[q.id] !== undefined ? answers[q.id] : answers[String(q.id)];
-        if (userAns !== undefined && parseInt(userAns) === parseInt(q.answer)) {
-          score += 1;
-        }
+    let detailedReview = [];
+
+    questions.forEach(q => {
+      const userAnsIdx = answers && (answers[q.id] !== undefined ? answers[q.id] : answers[String(q.id)]);
+      const isCorrect = userAnsIdx !== undefined && parseInt(userAnsIdx) === parseInt(q.answer);
+      if (isCorrect) score += 1;
+
+      const userAnswerText = (userAnsIdx !== undefined && q.options[userAnsIdx]) ? q.options[userAnsIdx] : 'Not Answered';
+      const correctAnswerText = q.options[q.answer] || '';
+
+      detailedReview.push({
+        question: q.question,
+        userAnswerText,
+        correctAnswerText,
+        isCorrect
       });
-    }
+    });
 
     const subId = 'SUB-' + Date.now();
-    const pdfData = {
-      'Submission ID': subId,
-      'Employee Name': employeeName || 'Unknown',
-      'Employee ID': employeeId || 'Unknown',
-      'Manager Name': managerName || 'Unknown',
-      'Exam Score': `${score} / ${questions.length || 60}`,
-      'Status': 'Pending Manager Feedback'
-    };
+    
+    const { pdfBuffer, downloadLink } = await createDetailedExamPDF(
+      subId, employeeName || 'Unknown', employeeId || 'Unknown', managerName || 'Unknown', score, questions.length, detailedReview
+    );
 
-    const pdfUrl = await createAndUploadPDF(`${subId}_Exam.pdf`, 'Probation Exam Result', pdfData);
+    // Save buffer in global store for direct client download
+    global.pdfBufferStore[subId] = pdfBuffer;
 
     const sheets = google.sheets({ version: 'v4', auth });
     await sheets.spreadsheets.values.append({
@@ -190,18 +216,36 @@ async function handleExamSubmission(req, res) {
       range: "'Exam_Records'!A:M",
       valueInputOption: 'USER_ENTERED',
       resource: {
-        values: [[subId, employeeName, employeeId, managerName, score, pdfUrl, 'Pending', '', '', '', '', '', new Date().toISOString()]]
+        values: [[subId, employeeName, employeeId, managerName, score, downloadLink || 'No PDF', 'Pending', '', '', '', '', '', new Date().toISOString()]]
       }
     });
 
-    res.json({ success: true, submissionId: subId, score, pdfUrl });
+    res.json({ 
+      success: true, 
+      submissionId: subId, 
+      score, 
+      total: questions.length,
+      pdfUrl: downloadLink, 
+      detailedReview 
+    });
   } catch (err) {
     console.error("Submit Exam Error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 }
 
-// Dashboard handler
+// Direct PDF download endpoint
+app.get('/api/download-pdf/:subId', (req, res) => {
+  const { subId } = req.params;
+  const buffer = global.pdfBufferStore[subId];
+  if (!buffer) {
+    return res.status(404).send('PDF file not found or expired.');
+  }
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename=${subId}_Exam_Result.pdf`);
+  res.send(buffer);
+});
+
 async function handleDashboard(req, res) {
   const { password } = req.body;
   if (password !== '1366') {
@@ -239,7 +283,6 @@ async function handleDashboard(req, res) {
   }
 }
 
-// Feedback handler
 async function handleFeedback(req, res) {
   const { password, submissionId, rating } = req.body;
   if (password !== '1366') {
@@ -281,26 +324,46 @@ async function handleFeedback(req, res) {
     else if (totalScore <= 140) finalRatingDesc = 'Rating 4 (Pass)';
     else finalRatingDesc = 'Rating 5 (Pass)';
 
-    const finalPdfData = {
-      'Submission ID': submissionId,
-      'Employee Name': empName,
-      'Employee ID': empId,
-      'Manager Name': mgrName,
-      'Exam Score': `${examScore} Marks`,
-      'Feedback Rating': `Rating ${rating} (${feedbackScore} Marks)`,
-      'Total Score': `${totalScore} Marks`,
-      'Final Evaluation Result': finalRatingDesc,
-      'Status': 'Completed'
-    };
+    let finalPdfUrl = "";
+    try {
+      const finalPdfDoc = new PDFDocument();
+      let buffers = [];
+      finalPdfDoc.on('data', buffers.push.bind(buffers));
+      finalPdfDoc.fontSize(18).text('Probation Final Result Report', { align: 'center' });
+      finalPdfDoc.moveDown();
+      finalPdfDoc.fontSize(11).text(`Submission ID: ${submissionId}`);
+      finalPdfDoc.text(`Employee Name: ${empName}`);
+      finalPdfDoc.text(`Exam Score: ${examScore} Marks`);
+      finalPdfDoc.text(`Feedback Rating: Rating ${rating} (${feedbackScore} Marks)`);
+      finalPdfDoc.text(`Total Score: ${totalScore} Marks`);
+      finalPdfDoc.text(`Final Result: ${finalRatingDesc}`);
+      finalPdfDoc.end();
 
-    const finalPdfUrl = await createAndUploadPDF(`${submissionId}_Final.pdf`, 'Probation Final Result Report', finalPdfData);
+      finalPdfUrl = await new Promise((resolve) => {
+        finalPdfDoc.on('end', async () => {
+          try {
+            const buf = Buffer.concat(buffers);
+            const uploadUrl = `${WEBDAV_BASE_URL}/${submissionId}_Final.pdf`.replace(/([^:]\/)\/+/g, "$1");
+            await axios.put(uploadUrl, buf, {
+              auth: { username: WEBDAV_USER, password: WEBDAV_PASS },
+              headers: { 'Content-Type': 'application/pdf' }
+            });
+            resolve(`${WEBDAV_PUBLIC_VIEW_URL}/${submissionId}_Final.pdf`);
+          } catch (e) {
+            resolve("");
+          }
+        });
+      });
+    } catch (e) {
+      console.error("Final PDF generation warning:", e.message);
+    }
 
     await sheets.spreadsheets.values.update({
       spreadsheetId: DATABASE_SHEET_ID,
       range: `'Exam_Records'!G${rowIndex}:L${rowIndex}`,
       valueInputOption: 'USER_ENTERED',
       resource: {
-        values: [['Completed', `Rating ${rating}`, feedbackScore, totalScore, finalRatingDesc, finalPdfUrl]]
+        values: [['Completed', `Rating ${rating}`, feedbackScore, totalScore, finalRatingDesc, finalPdfUrl || 'No PDF']]
       }
     });
 
@@ -311,7 +374,6 @@ async function handleFeedback(req, res) {
   }
 }
 
-// Explicit routes
 app.post('/api/submit-exam', handleExamSubmission);
 app.post('/api/submit', handleExamSubmission);
 app.post('/api/exam/submit', handleExamSubmission);
@@ -324,7 +386,6 @@ app.post('/dashboard', handleDashboard);
 app.post('/api/submit-feedback', handleFeedback);
 app.post('/submit-feedback', handleFeedback);
 
-// UNIVERSAL CATCH-ALL POST ROUTE
 app.post('*', (req, res) => {
   const urlPath = req.path.toLowerCase();
   if (urlPath.includes('dashboard')) {
