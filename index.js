@@ -90,7 +90,7 @@ app.get('/api/questions', async (req, res) => {
           content: `Company Data:\n${sheetDataText}`
         }
       ],
-      model: "llama-3.3-70b-versatile", // Updated to active Groq model
+      model: "llama-3.1-8b-instant", // Stable and active Groq model
       temperature: 0.3,
     });
 
