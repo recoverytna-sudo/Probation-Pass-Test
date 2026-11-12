@@ -113,13 +113,13 @@ app.get('/', (req, res) => {
   res.send('Odoo Probation Exam Backend is running successfully!');
 });
 
-// Create Detailed PDF with question review and answers
+// Create Detailed PDF with Employee Name and ID in filename, supporting Burmese text structure safely
 async function createDetailedExamPDF(subId, employeeName, employeeId, managerName, score, totalQuestions, detailedReview) {
   const doc = new PDFDocument({ margin: 40 });
   let buffers = [];
   doc.on('data', buffers.push.bind(buffers));
   
-  doc.fontSize(20).text('Company Probation Exam Result', { align: 'center' });
+  doc.fontSize(18).text('Company Probation Exam Result', { align: 'center' });
   doc.moveDown(0.5);
   doc.fontSize(12).text(`Submission ID: ${subId}`, { align: 'center' });
   doc.moveDown();
@@ -132,14 +132,14 @@ async function createDetailedExamPDF(subId, employeeName, employeeId, managerNam
   doc.text(`Final Exam Score: ${score} / ${totalQuestions}`);
   doc.moveDown();
 
-  doc.fontSize(14).text('Detailed Question Review:', { underline: true });
+  doc.fontSize(12).text('Detailed Question Review:', { underline: true });
   doc.moveDown(0.5);
 
   detailedReview.forEach((item, idx) => {
-    doc.fontSize(10).fillColor('#000000').text(`${idx + 1}. ${item.question}`);
-    doc.text(`   - Your Answer: ${item.userAnswerText} ${item.isCorrect ? '(Correct ✓)' : '(Incorrect ✗)'}`, { color: item.isCorrect ? 'green' : 'red' });
+    doc.fontSize(9).fillColor('#000000').text(`${idx + 1}. Q: ${item.question}`);
+    doc.text(`   - Your Answer: ${item.userAnswerText} ${item.isCorrect ? '(Correct ✓)' : '(Incorrect ✗)'}`);
     if (!item.isCorrect) {
-      doc.text(`   - Correct Answer: ${item.correctAnswerText}`, { color: 'green' });
+      doc.text(`   - Correct Answer: ${item.correctAnswerText}`);
     }
     doc.moveDown(0.3);
   });
@@ -151,8 +151,11 @@ async function createDetailedExamPDF(subId, employeeName, employeeId, managerNam
       try {
         let pdfBuffer = Buffer.concat(buffers);
         
-        // Upload to WebDAV
-        const fileName = `${subId}_Exam.pdf`;
+        // Clean employee name and ID for safe filename
+        const safeName = employeeName.replace(/[^a-zA-Z0-9\u0080-\uffff]/g, '_');
+        const safeId = employeeId.replace(/[^a-zA-Z0-9\u0080-\uffff]/g, '_');
+        const fileName = `${safeName}_${safeId}_${subId}_Exam_Result.pdf`;
+
         const uploadUrl = `${WEBDAV_BASE_URL}/${fileName}`.replace(/([^:]\/)\/+/g, "$1");
 
         await axios.put(uploadUrl, pdfBuffer, {
@@ -161,17 +164,16 @@ async function createDetailedExamPDF(subId, employeeName, employeeId, managerNam
         });
 
         const downloadLink = `${WEBDAV_PUBLIC_VIEW_URL}/${fileName}`;
-        resolve({ pdfBuffer, downloadLink });
+        resolve({ pdfBuffer, downloadLink, fileName });
       } catch (error) {
         console.error("WebDAV Upload Warning:", error.response?.data || error.message);
-        resolve({ pdfBuffer: Buffer.from([]), downloadLink: "" });
+        resolve({ pdfBuffer: Buffer.from([]), downloadLink: "", fileName: `${subId}_Exam_Result.pdf` });
       }
     });
   });
 }
 
-// In-memory buffer store for direct download
-global.pdfBufferStore = global.pdfBufferStore = {};
+global.pdfBufferStore = global.pdfBufferStore || {};
 
 async function handleExamSubmission(req, res) {
   try {
@@ -203,11 +205,10 @@ async function handleExamSubmission(req, res) {
 
     const subId = 'SUB-' + Date.now();
     
-    const { pdfBuffer, downloadLink } = await createDetailedExamPDF(
+    const { pdfBuffer, downloadLink, fileName } = await createDetailedExamPDF(
       subId, employeeName || 'Unknown', employeeId || 'Unknown', managerName || 'Unknown', score, questions.length, detailedReview
     );
 
-    // Save buffer in global store for direct client download
     global.pdfBufferStore[subId] = pdfBuffer;
 
     const sheets = google.sheets({ version: 'v4', auth });
@@ -220,21 +221,23 @@ async function handleExamSubmission(req, res) {
       }
     });
 
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.json({ 
       success: true, 
       submissionId: subId, 
       score, 
       total: questions.length,
       pdfUrl: downloadLink, 
+      fileName,
       detailedReview 
     });
   } catch (err) {
     console.error("Submit Exam Error:", err);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.status(500).json({ success: false, error: err.message });
   }
 }
 
-// Direct PDF download endpoint
 app.get('/api/download-pdf/:subId', (req, res) => {
   const { subId } = req.params;
   const buffer = global.pdfBufferStore[subId];
@@ -249,6 +252,7 @@ app.get('/api/download-pdf/:subId', (req, res) => {
 async function handleDashboard(req, res) {
   const { password } = req.body;
   if (password !== '1366') {
+    return res.setHeader('Content-Type', 'application/json; charset=utf-8');
     return res.status(401).json({ success: false, message: 'စကားဝှက် (Password) မှားယွင်းနေပါသည်။' });
   }
 
@@ -276,9 +280,11 @@ async function handleDashboard(req, res) {
       timestamp: row[12] || ''
     }));
 
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.json({ success: true, records: data });
   } catch (err) {
     console.error("Dashboard Error:", err);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.status(500).json({ success: false, message: err.message });
   }
 }
@@ -286,6 +292,7 @@ async function handleDashboard(req, res) {
 async function handleFeedback(req, res) {
   const { password, submissionId, rating } = req.body;
   if (password !== '1366') {
+    return res.setHeader('Content-Type', 'application/json; charset=utf-8');
     return res.status(401).json({ success: false, message: 'စကားဝှက် (Password) မှားယွင်းနေပါသည်။' });
   }
 
@@ -314,7 +321,10 @@ async function handleFeedback(req, res) {
       }
     }
 
-    if (rowIndex === -1) return res.status(404).json({ success: false, message: 'Record not found' });
+    if (rowIndex === -1) {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      return res.status(404).json({ success: false, message: 'Record not found' });
+    }
 
     const totalScore = examScore + feedbackScore;
     let finalRatingDesc = '';
@@ -367,9 +377,11 @@ async function handleFeedback(req, res) {
       }
     });
 
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.json({ success: true, totalScore, finalRatingDesc, finalPdfUrl });
   } catch (err) {
     console.error("Feedback Error:", err);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.status(500).json({ success: false, message: err.message });
   }
 }
