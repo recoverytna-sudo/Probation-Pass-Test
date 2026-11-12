@@ -1,16 +1,16 @@
 {
-  "name": "probation-exam-backend",
+  "name": "probation-exam-groq",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.1.1",
     "axios": "^1.6.8",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "groq-sdk": "^0.3.3",
     "googleapis": "^134.0.0",
     "pdfkit": "^0.14.0"
   }
