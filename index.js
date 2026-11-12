@@ -5,7 +5,6 @@ const { google } = require('googleapis');
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
-const XLSX = require('xlsx');
 require('dotenv').config();
 
 const app = express();
@@ -44,12 +43,11 @@ function shuffleArray(array) {
   return array;
 }
 
-// Read questions directly from the uploaded Excel/Google Sheet 'Multiple Choose' tab
-async function fetchQuestionsFromExcelSheet() {
+// Fetch questions directly from Google Sheet 'Multiple Choose' tab
+async function fetchQuestionsFromSheet() {
   try {
     const sheets = google.sheets({ version: 'v4', auth });
     
-    // Fetch values from 'Multiple Choose' tab of the PROCESS_SHEET_ID
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: PROCESS_SHEET_ID,
       range: "'Multiple Choose'!A:G",
@@ -57,18 +55,15 @@ async function fetchQuestionsFromExcelSheet() {
 
     const rows = response.data.values || [];
     if (rows.length <= 1) {
-      throw new Error("Excel Sheet ထဲတွင် မေးခွန်းများ မရှိသေးပါ။");
+      throw new Error("Google Sheet 'Multiple Choose' Tab ထဲတွင် မေးခွန်းများ မရှိသေးပါ။");
     }
 
-    const header = rows[0]; // ['No', 'Questions', '1', '2', '3', '4', 'Correct Answer']
-    const dataRows = rows.slice(1);
+    const dataRows = rows.slice(1); // Skip header
 
-    // Format rows into question objects
     let allQuestions = dataRows.map((row, idx) => {
       const questionText = row[1] || '';
-      const options = [row[2], row[3], row[4], row[5]].filter(opt => opt !== undefined && opt !== '');
+      const options = [row[2], row[3], row[4], row[5]].filter(opt => opt !== undefined && opt !== '' && opt !== null);
       
-      // Correct answer index (convert 1-4 to 0-3 index)
       let correctAnsRaw = parseInt(row[6]) - 1;
       if (isNaN(correctAnsRaw) || correctAnsRaw < 0 || correctAnsRaw >= options.length) {
         correctAnsRaw = 0;
@@ -82,13 +77,12 @@ async function fetchQuestionsFromExcelSheet() {
       };
     }).filter(q => q.question && q.options.length > 0);
 
-    // Randomize questions every time
+    // Randomize questions
     shuffleArray(allQuestions);
 
-    // Take up to 60 questions (or all available if less than 60)
+    // Take up to 60 questions (or all if less than 60)
     const selectedQuestions = allQuestions.slice(0, 60);
 
-    // Re-index numbering
     return selectedQuestions.map((q, index) => ({
       ...q,
       no: index + 1
@@ -101,10 +95,9 @@ async function fetchQuestionsFromExcelSheet() {
 
 app.get('/api/questions', async (req, res) => {
   try {
-    const questions = await fetchQuestionsFromExcelSheet();
+    const questions = await fetchQuestionsFromSheet();
     global.cachedQuestions = questions;
 
-    // Send questions to frontend without revealing correct answers
     const sanitized = questions.map((q) => ({
       no: q.no,
       id: q.id,
