@@ -4,46 +4,42 @@ const axios = require('axios');
 const Groq = require('groq-sdk');
 const { google } = require('googleapis');
 const PDFDocument = require('pdfkit');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Initialize Groq API
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// Robust Private Key Formatter (Fixes OpenSSL Decoder Error)
-function getFormattedPrivateKey() {
-  let pk = process.env.GOOGLE_PRIVATE_KEY || '';
-  pk = pk.trim();
-  // Remove surrounding quotes if captured
-  if ((pk.startsWith('"') && pk.endsWith('"')) || (pk.startsWith("'") && pk.endsWith("'"))) {
-    pk = pk.slice(1, -1).trim();
+// Direct JSON Parsing Method (100% Works on Vercel without OpenSSL errors)
+const tempKeyPath = path.join('/tmp', 'sa-key.json');
+try {
+  let saJsonString = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '{}';
+  // Clean up if wrapped in extra quotes
+  if (saJsonString.startsWith('"') && saJsonString.endsWith('"')) {
+    saJsonString = saJsonString.slice(1, -1);
   }
-  // Convert literal \n string to actual newlines
-  pk = pk.replace(/\\n/g, '\n');
-  return pk;
+  fs.writeFileSync(tempKeyPath, saJsonString);
+} catch (err) {
+  console.error("Error writing service account JSON to /tmp:", err);
 }
 
 const auth = new google.auth.GoogleAuth({
-  credentials: {
-    client_email: process.env.GOOGLE_CLIENT_EMAIL,
-    private_key: getFormattedPrivateKey(),
-  },
+  keyFile: tempKeyPath,
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
 const PROCESS_SHEET_ID = process.env.PROCESS_GOOGLE_SHEET_ID;
 const DATABASE_SHEET_ID = process.env.DATABASE_GOOGLE_SHEET_ID;
 
-// WebDAV Configuration (ownCloud / Nextcloud)
 const WEBDAV_BASE_URL = process.env.WEBDAV_BASE_URL;
 const WEBDAV_USER = process.env.WEBDAV_USER;
 const WEBDAV_PASS = process.env.WEBDAV_PASS;
 const WEBDAV_PUBLIC_VIEW_URL = process.env.WEBDAV_PUBLIC_VIEW_URL;
 
-// Helper: Read Data directly from Google Sheet ('Update' & 'Do & Dont')
 async function fetchProcessSheetData() {
   try {
     const sheets = google.sheets({ version: 'v4', auth });
@@ -69,15 +65,13 @@ async function fetchProcessSheetData() {
     return combinedText.substring(0, 15000);
   } catch (err) {
     console.error("Error reading Google Sheets:", err.message);
-    throw new Error("Google Sheet မှ ဒေတာဖတ်ယူရာတွင် အမှားအယွင်းရှိနေပါသည်။ Sheet ID နှင့် Permission ကို စစ်ဆေးပါ။");
+    throw new Error("Google Sheet မှ ဒေတာဖတ်ယူရာတွင် အမှားအယွင်းရှိနေပါသည်။");
   }
 }
 
-// 1. API: Generate 60 Questions using Groq AI
 app.get('/api/questions', async (req, res) => {
   try {
     const sheetDataText = await fetchProcessSheetData();
-
     const chatCompletion = await groq.chat.completions.create({
       messages: [
         {
@@ -109,11 +103,10 @@ app.get('/api/questions', async (req, res) => {
     res.json({ success: true, questions: sanitized });
   } catch (err) {
     console.error("AI Generation Error:", err);
-    res.status(500).json({ success: false, error: err.message || "Failed to generate questions using Groq AI." });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Helper: Create PDF and Upload to WebDAV
 async function createAndUploadPDF(fileName, title, contentData) {
   const doc = new PDFDocument();
   let buffers = [];
@@ -150,7 +143,6 @@ async function createAndUploadPDF(fileName, title, contentData) {
   });
 }
 
-// 2. API: Submit Exam
 app.post('/api/submit-exam', async (req, res) => {
   try {
     const { employeeName, employeeId, managerName, answers } = req.body;
@@ -192,7 +184,6 @@ app.post('/api/submit-exam', async (req, res) => {
   }
 });
 
-// 3. API: Dashboard Records (Password Protected: 1366)
 app.post('/api/dashboard', async (req, res) => {
   const { password } = req.body;
   if (password !== '1366') {
@@ -226,11 +217,10 @@ app.post('/api/dashboard', async (req, res) => {
     res.json({ success: true, records: data });
   } catch (err) {
     console.error("Dashboard Error:", err);
-    res.status(500).json({ success: false, message: err.message || "Failed to load dashboard records." });
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 4. API: Submit Feedback (Password: 1366)
 app.post('/api/submit-feedback', async (req, res) => {
   const { password, submissionId, rating } = req.body;
   if (password !== '1366') {
@@ -265,7 +255,6 @@ app.post('/api/submit-feedback', async (req, res) => {
     if (rowIndex === -1) return res.status(404).json({ success: false, message: 'Record not found' });
 
     const totalScore = examScore + feedbackScore;
-
     let finalRatingDesc = '';
     if (totalScore < 80) finalRatingDesc = 'Rating 1 (Exam Fail)';
     else if (totalScore < 90) finalRatingDesc = 'Rating 2 (Exam Fail)';
