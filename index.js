@@ -46,7 +46,7 @@ function shuffleArray(array) {
   return array;
 }
 
-async function fetchStrictBurmeseSheetData() {
+async function fetchOptimizedSheetData() {
   try {
     const sheets = google.sheets({ version: 'v4', auth });
     
@@ -74,16 +74,22 @@ async function fetchStrictBurmeseSheetData() {
     const shuffledUpdate = shuffleArray([...updateRows]);
     const shuffledDoDont = shuffleArray([...doDontRows]);
 
-    const selectedUpdate = shuffledUpdate.slice(0, 45);
-    const selectedDoDont = shuffledDoDont.slice(0, 35);
+    // Reduced slice count to stay safely under Groq's 8000 TPM limit
+    const selectedUpdate = shuffledUpdate.slice(0, 20);
+    const selectedDoDont = shuffledDoDont.slice(0, 15);
 
-    let combinedText = `=== SHEET DATA 1 (${firstTabName}) ===\n`;
-    selectedUpdate.forEach(row => combinedText += row.join(' | ') + '\n');
+    let combinedText = "";
+    selectedUpdate.forEach(row => {
+      const line = row.filter(Boolean).join(' ');
+      if (line) combinedText += line + '\n';
+    });
     
-    combinedText += `\n=== SHEET DATA 2 (${secondTabName}) ===\n`;
-    selectedDoDont.forEach(row => combinedText += row.join(' | ') + '\n');
+    selectedDoDont.forEach(row => {
+      const line = row.filter(Boolean).join(' ');
+      if (line) combinedText += line + '\n';
+    });
 
-    return combinedText.substring(0, 8000);
+    return combinedText.substring(0, 3000);
   } catch (err) {
     console.error("Error reading Google Sheets:", err.message);
     throw new Error("Google Sheet မှ ဒေတာဖတ်ယူရာတွင် အမှားအယွင်းရှိနေပါသည်။");
@@ -92,21 +98,21 @@ async function fetchStrictBurmeseSheetData() {
 
 app.get('/api/questions', async (req, res) => {
   try {
-    const sheetDataText = await fetchStrictBurmeseSheetData();
+    const sheetDataText = await fetchOptimizedSheetData();
     const chatCompletion = await groq.chat.completions.create({
       messages: [
         {
           role: "system",
-          content: "You are a precise data formatter. Task: Create exactly 60 fill-in-the-blank (ကွက်လပ်ဖြည့်) multiple-choice questions strictly using ONLY the exact Burmese text and sentences provided below. Do NOT translate to English. Do NOT rewrite, paraphrase, or change the meaning of the original sentences. For each question, take a complete sentence or phrase from the source text, replace one key word or phrase with '_____' to form the question, and provide the correct missing word as one of the 4 options, while the other 3 options are plausible alternative words from the text. Return ONLY a valid JSON array format, with no markdown or extra text: [{\"id\": 1, \"question\": \"... (_____)...\", \"options\": [\"မှန်ကန်သောစာသား\", \"အခြား၁\", \"အခြား၂\", \"အခြား၃\"], \"answer\": 0}]"
+          content: "You are a precise data formatter. Create exactly 60 fill-in-the-blank (ကွက်လပ်ဖြည့်) multiple-choice questions strictly using ONLY the Burmese text provided. Do not translate. Replace one key word with '_____' for each question. Provide 4 options where index 0-3 is correct. Return ONLY a valid JSON array format, with no markdown or extra text: [{\"id\": 1, \"question\": \"...\", \"options\": [\"A\", \"B\", \"C\", \"D\"], \"answer\": 0}]"
         },
         {
           role: "user",
-          content: `Source Burmese Text:\n${sheetDataText}`
+          content: sheetDataText
         }
       ],
       model: "openai/gpt-oss-120b",
-      temperature: 0.1, // Near zero to preserve exact native words and prevent creative rewriting
-      max_tokens: 6000,
+      temperature: 0.1,
+      max_tokens: 4000,
       reasoning_format: "hidden"
     });
 
