@@ -49,6 +49,7 @@ global.examSessions = global.examSessions || {};
 async function fetchQuestionsFromSheet() {
   try {
     const sheets = google.sheets({ version: 'v4', auth });
+    
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: PROCESS_SHEET_ID,
       range: "'Multiple Choose'!A:G",
@@ -56,37 +57,39 @@ async function fetchQuestionsFromSheet() {
 
     const rows = response.data.values || [];
     if (rows.length <= 1) {
-      throw new Error("Google Sheet 'Multiple Choose' Tab ထဲတွင် မေးခွန်းများ မရှိသေးပါ။");
+      throw new Error("Google Sheet 'Multiple Choose' Tab ထဲတွင် မေးခွန်းများ မရှိပါ။");
     }
 
     const dataRows = rows.slice(1);
     let allQuestions = [];
 
     dataRows.forEach((row, idx) => {
-      if (!row[1]) return;
-      const options = [row[2], row[3], row[4], row[5]].filter(opt => opt !== undefined && opt !== '' && opt !== null);
+      // row[1] is Question text (Column B)
+      if (!row[1] || String(row[1]).trim() === "") return;
+
+      // Options are in Column C, D, E, F (Indices 2, 3, 4, 5)
+      const options = [row[2], row[3], row[4], row[5]].filter(opt => opt !== undefined && opt !== null && String(opt).trim() !== "");
       
+      // Correct Answer is in Column G (Index 6)
       let correctAnsRaw = String(row[6] || '1').trim();
 
       allQuestions.push({
         id: idx + 1,
         no: row[0] || (idx + 1),
-        question: row[1],
+        question: String(row[1]).trim(),
         options: options,
         correctAnswer: correctAnsRaw
       });
     });
 
     if (allQuestions.length === 0) {
-      throw new Error("Valid questions could not be parsed from sheet.");
+      throw new Error("No valid questions parsed from sheet range.");
     }
 
     shuffleArray(allQuestions);
-    const selectedQuestions = allQuestions.slice(0, 40);
-
-    return selectedQuestions;
+    return allQuestions.slice(0, 40); // ၄၀ လုံး Random ဆွဲထုတ်မည်
   } catch (err) {
-    console.error("Detailed Sheet Fetch Error:", err.message);
+    console.error("Sheet Fetch Error:", err.message);
     throw new Error(err.message);
   }
 }
@@ -123,7 +126,7 @@ app.get('/', (req, res) => {
   res.send('Odoo Probation Exam Backend is running successfully!');
 });
 
-// PDF & Submit handlers
+// PDF & Submit Handlers
 async function createAndUploadPDF(subId, userInfo, score, total, percentage, passStatus, detailedResults) {
   const doc = new PDFDocument({ margin: 40 });
   let buffers = [];
@@ -191,7 +194,7 @@ async function handleExamSubmission(req, res) {
     let detailedResults = [];
 
     questions.forEach((q, i) => {
-      const userAns = answers && answers[q.id] !== undefined ? answers[q.id] : answers[String(q.id)];
+      const userAns = answers && (answers[q.id] !== undefined ? answers[q.id] : answers[String(q.id)]);
       const correctAns = String(q.correctAnswer).trim();
       
       let isCorrect = false;
