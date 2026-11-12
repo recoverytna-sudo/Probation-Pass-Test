@@ -4,8 +4,6 @@ const axios = require('axios');
 const Groq = require('groq-sdk');
 const { google } = require('googleapis');
 const PDFDocument = require('pdfkit');
-const fs = require('fs');
-const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -15,30 +13,24 @@ app.use(express.json());
 // Initialize Groq API
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// Bulletproof Google Sheets Auth Setup using /tmp file (Fixes OpenSSL Decoder Error completely)
-const tempKeyPath = path.join('/tmp', 'sa-key.json');
-try {
-  if (!fs.existsSync(tempKeyPath)) {
-    let privateKey = process.env.GOOGLE_PRIVATE_KEY || '';
-    if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
-      privateKey = privateKey.slice(1, -1);
-    }
-    privateKey = privateKey.replace(/\\n/g, '\n');
-
-    const serviceAccountData = {
-      type: "service_account",
-      project_id: process.env.GOOGLE_PROJECT_ID || "testing-512808",
-      private_key: privateKey,
-      client_email: process.env.GOOGLE_CLIENT_EMAIL,
-    };
-    fs.writeFileSync(tempKeyPath, JSON.stringify(serviceAccountData));
+// Robust Private Key Formatter (Fixes OpenSSL Decoder Error)
+function getFormattedPrivateKey() {
+  let pk = process.env.GOOGLE_PRIVATE_KEY || '';
+  pk = pk.trim();
+  // Remove surrounding quotes if captured
+  if ((pk.startsWith('"') && pk.endsWith('"')) || (pk.startsWith("'") && pk.endsWith("'"))) {
+    pk = pk.slice(1, -1).trim();
   }
-} catch (err) {
-  console.error("Error creating temp key file:", err);
+  // Convert literal \n string to actual newlines
+  pk = pk.replace(/\\n/g, '\n');
+  return pk;
 }
 
 const auth = new google.auth.GoogleAuth({
-  keyFile: tempKeyPath,
+  credentials: {
+    client_email: process.env.GOOGLE_CLIENT_EMAIL,
+    private_key: getFormattedPrivateKey(),
+  },
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
