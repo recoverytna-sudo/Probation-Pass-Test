@@ -100,9 +100,11 @@ const handleGetQuestions = async (req, res) => {
       options: q.options
     }));
 
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.json({ success: true, questions: sanitized });
   } catch (err) {
     console.error("Questions API Error:", err);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.status(500).json({ success: false, error: err.message });
   }
 };
@@ -113,7 +115,7 @@ app.get('/', (req, res) => {
   res.send('Odoo Probation Exam Backend is running successfully!');
 });
 
-// Create Detailed PDF with Employee Name and ID in filename, supporting Burmese text structure safely
+// Create Clean PDF with Employee Name and ID in filename, avoiding font corruption
 async function createDetailedExamPDF(subId, employeeName, employeeId, managerName, score, totalQuestions, detailedReview) {
   const doc = new PDFDocument({ margin: 40 });
   let buffers = [];
@@ -132,14 +134,15 @@ async function createDetailedExamPDF(subId, employeeName, employeeId, managerNam
   doc.text(`Final Exam Score: ${score} / ${totalQuestions}`);
   doc.moveDown();
 
-  doc.fontSize(12).text('Detailed Question Review:', { underline: true });
+  doc.fontSize(12).text('Detailed Question Review Summary:', { underline: true });
   doc.moveDown(0.5);
 
   detailedReview.forEach((item, idx) => {
-    doc.fontSize(9).fillColor('#000000').text(`${idx + 1}. Q: ${item.question}`);
-    doc.text(`   - Your Answer: ${item.userAnswerText} ${item.isCorrect ? '(Correct ✓)' : '(Incorrect ✗)'}`);
+    doc.fontSize(9).fillColor('#000000').text(`Question No. ${idx + 1}`);
+    doc.text(` - Status: ${item.isCorrect ? 'CORRECT (✓)' : 'INCORRECT (✗)'}`);
+    doc.text(` - Your Answer: ${item.userAnswerText}`);
     if (!item.isCorrect) {
-      doc.text(`   - Correct Answer: ${item.correctAnswerText}`);
+      doc.text(` - Correct Answer: ${item.correctAnswerText}`);
     }
     doc.moveDown(0.3);
   });
@@ -151,9 +154,8 @@ async function createDetailedExamPDF(subId, employeeName, employeeId, managerNam
       try {
         let pdfBuffer = Buffer.concat(buffers);
         
-        // Clean employee name and ID for safe filename
-        const safeName = employeeName.replace(/[^a-zA-Z0-9\u0080-\uffff]/g, '_');
-        const safeId = employeeId.replace(/[^a-zA-Z0-9\u0080-\uffff]/g, '_');
+        const safeName = employeeName.replace(/[^a-zA-Z0-9]/g, '_') || 'Employee';
+        const safeId = employeeId.replace(/[^a-zA-Z0-9]/g, '_') || 'ID';
         const fileName = `${safeName}_${safeId}_${subId}_Exam_Result.pdf`;
 
         const uploadUrl = `${WEBDAV_BASE_URL}/${fileName}`.replace(/([^:]\/)\/+/g, "$1");
@@ -252,7 +254,7 @@ app.get('/api/download-pdf/:subId', (req, res) => {
 async function handleDashboard(req, res) {
   const { password } = req.body;
   if (password !== '1366') {
-    return res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
     return res.status(401).json({ success: false, message: 'စကားဝှက် (Password) မှားယွင်းနေပါသည်။' });
   }
 
@@ -292,7 +294,7 @@ async function handleDashboard(req, res) {
 async function handleFeedback(req, res) {
   const { password, submissionId, rating } = req.body;
   if (password !== '1366') {
-    return res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
     return res.status(401).json({ success: false, message: 'စကားဝှက် (Password) မှားယွင်းနေပါသည်။' });
   }
 
