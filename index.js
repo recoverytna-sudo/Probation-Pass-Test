@@ -14,11 +14,9 @@ app.use(express.json());
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// Direct JSON Parsing Method (100% Works on Vercel without OpenSSL errors)
 const tempKeyPath = path.join('/tmp', 'sa-key.json');
 try {
   let saJsonString = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '{}';
-  // Clean up if wrapped in extra quotes
   if (saJsonString.startsWith('"') && saJsonString.endsWith('"')) {
     saJsonString = saJsonString.slice(1, -1);
   }
@@ -65,7 +63,7 @@ async function fetchProcessSheetData() {
     return combinedText.substring(0, 15000);
   } catch (err) {
     console.error("Error reading Google Sheets:", err.message);
-    throw new Error("Google Sheet မှ ဒေတာဖတ်ယူရာတွင် အမှားအယွင်းရှိနေပါသည်။");
+    throw new Error("Google Sheet မှ ဒေတာဖတ်ယူရာတွင် အမှားအယွင်းရှိနေပါသည်။ Update နှင့် Do & Dont Tab နာမည်များကို စစ်ဆေးပါ။");
   }
 }
 
@@ -170,7 +168,7 @@ app.post('/api/submit-exam', async (req, res) => {
     const sheets = google.sheets({ version: 'v4', auth });
     await sheets.spreadsheets.values.append({
       spreadsheetId: DATABASE_SHEET_ID,
-      range: 'Exam_Records!A:M',
+      range: "'Exam_Records'!A:M",
       valueInputOption: 'USER_ENTERED',
       resource: {
         values: [[subId, employeeName, employeeId, managerName, score, pdfUrl, 'Pending', '', '', '', '', '', new Date().toISOString()]]
@@ -194,7 +192,7 @@ app.post('/api/dashboard', async (req, res) => {
     const sheets = google.sheets({ version: 'v4', auth });
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: DATABASE_SHEET_ID,
-      range: 'Exam_Records!A:M',
+      range: "'Exam_Records'!A:M",
     });
     const rows = response.data.values || [];
     const data = rows.slice(1).map((row, idx) => ({
@@ -234,7 +232,7 @@ app.post('/api/submit-feedback', async (req, res) => {
     const sheets = google.sheets({ version: 'v4', auth });
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: DATABASE_SHEET_ID,
-      range: 'Exam_Records!A:M',
+      range: "'Exam_Records'!A:M",
     });
     const rows = response.data.values || [];
     let rowIndex = -1;
@@ -278,7 +276,7 @@ app.post('/api/submit-feedback', async (req, res) => {
 
     await sheets.spreadsheets.values.update({
       spreadsheetId: DATABASE_SHEET_ID,
-      range: `Exam_Records!G${rowIndex}:L${rowIndex}`,
+      range: `'Exam_Records'!G${rowIndex}:L${rowIndex}`,
       valueInputOption: 'USER_ENTERED',
       resource: {
         values: [['Completed', `Rating ${rating}`, feedbackScore, totalScore, finalRatingDesc, finalPdfUrl]]
