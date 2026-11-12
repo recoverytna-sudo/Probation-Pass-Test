@@ -46,7 +46,7 @@ function shuffleArray(array) {
   return array;
 }
 
-async function fetchOptimizedSheetData() {
+async function fetchSheetDataSafe() {
   try {
     const sheets = google.sheets({ version: 'v4', auth });
     
@@ -74,9 +74,8 @@ async function fetchOptimizedSheetData() {
     const shuffledUpdate = shuffleArray([...updateRows]);
     const shuffledDoDont = shuffleArray([...doDontRows]);
 
-    // Reduced slice count to stay safely under Groq's 8000 TPM limit
-    const selectedUpdate = shuffledUpdate.slice(0, 20);
-    const selectedDoDont = shuffledDoDont.slice(0, 15);
+    const selectedUpdate = shuffledUpdate.slice(0, 10);
+    const selectedDoDont = shuffledDoDont.slice(0, 10);
 
     let combinedText = "";
     selectedUpdate.forEach(row => {
@@ -89,55 +88,74 @@ async function fetchOptimizedSheetData() {
       if (line) combinedText += line + '\n';
     });
 
-    return combinedText.substring(0, 3000);
+    return combinedText.substring(0, 1500);
   } catch (err) {
     console.error("Error reading Google Sheets:", err.message);
-    throw new Error("Google Sheet မှ ဒေတာဖတ်ယူရာတွင် အမှားအယွင်းရှိနေပါသည်။");
+    return "ကုမ္ပဏီ လုပ်ထုံးလုပ်နည်းနှင့် ပေါ်လစီများ";
   }
 }
 
 app.get('/api/questions', async (req, res) => {
   try {
-    const sheetDataText = await fetchOptimizedSheetData();
-    const chatCompletion = await groq.chat.completions.create({
-      messages: [
-        {
-          role: "system",
-          content: "You are a precise data formatter. Create exactly 60 fill-in-the-blank (ကွက်လပ်ဖြည့်) multiple-choice questions strictly using ONLY the Burmese text provided. Do not translate. Replace one key word with '_____' for each question. Provide 4 options where index 0-3 is correct. Return ONLY a valid JSON array format, with no markdown or extra text: [{\"id\": 1, \"question\": \"...\", \"options\": [\"A\", \"B\", \"C\", \"D\"], \"answer\": 0}]"
-        },
-        {
-          role: "user",
-          content: sheetDataText
-        }
-      ],
-      model: "openai/gpt-oss-120b",
-      temperature: 0.1,
-      max_tokens: 4000,
-      reasoning_format: "hidden"
-    });
-
-    let textResponse = chatCompletion.choices[0]?.message?.content || "";
-    textResponse = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+    const sheetDataText = await fetchSheetDataSafe();
     
-    const firstBracket = textResponse.indexOf('[');
-    const lastBracket = textResponse.lastIndexOf(']');
-    if (firstBracket !== -1 && lastBracket !== -1) {
-      textResponse = textResponse.substring(firstBracket, lastBracket + 1);
+    let questions = [];
+    try {
+      const chatCompletion = await groq.chat.completions.create({
+        messages: [
+          {
+            role: "system",
+            content: "Create 10 fill-in-the-blank multiple-choice questions in Burmese using the provided text. Replace one key word with '_____'. Return ONLY a valid JSON array format: [{\"id\": 1, \"question\": \"...\", \"options\": [\"A\", \"B\", \"C\", \"D\"], \"answer\": 0}]"
+          },
+          {
+            role: "user",
+            content: sheetDataText || "ကုမ္ပဏီ လုပ်ထုံးလုပ်နည်း စည်းကမ်းချက်များ"
+          }
+        ],
+        model: "openai/gpt-oss-120b",
+        temperature: 0.1,
+        max_tokens: 2000,
+        reasoning_format: "hidden"
+      });
+
+      let textResponse = chatCompletion.choices[0]?.message?.content || "";
+      textResponse = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+      
+      const firstBracket = textResponse.indexOf('[');
+      const lastBracket = textResponse.lastIndexOf(']');
+      
+      if (firstBracket !== -1 && lastBracket !== -1) {
+        textResponse = textResponse.substring(firstBracket, lastBracket + 1);
+      }
+
+      questions = JSON.parse(textResponse);
+    } catch (aiErr) {
+      console.error("AI Generation Warning, using fallback questions:", aiErr.message);
     }
 
-    const questions = JSON.parse(textResponse);
+    // Fallback if AI fails or returns empty
+    if (!Array.isArray(questions) || questions.length === 0) {
+      questions = [
+        { id: 1, question: "ကုမ္ပဏီ၏ လုပ်ထုံးလုပ်နည်းနှင့် ပေါ်လစီများကို တိကျစွာ _____ ရမည်။", options: ["လိုက်နာ", "ဖျက်သိမ်း", "ကျော်လွန်", "မေ့ထား"], answer: 0 },
+        { id: 2, question: "ဝန်ထမ်းများသည် သတ်မှတ်ထားသော အချိန်ဇယားအတိုင်း _____ ရမည်။", options: ["တက်ရောက်", "ထွက်ခွာ", "အနားယူ", "နောက်ကျ"], answer: 0 },
+        { id: 3, question: "လုပ်ငန်းခွင်အတွင်း စည်းကမ်းများကို _____ စောင့်ထိန်းရမည်။", options: ["တင်းကျပ်စွာ", "ပေါ့ဆစွာ", "ခွင့်ပြုချက်ဖြင့်", "ဆန့်ကျင်၍"], answer: 0 },
+        { id: 4, question: "အထက်လူကြီး၏ ညွှန်ကြားချက်များကို လိုက်နာရန် _____ ရှိသည်။", options: ["တာဝန်", "အခွင့်အရေး", "ကန့်သတ်ချက်", "ဆန္ဒ"], answer: 0 },
+        { id: 5, question: "ကုမ္ပဏီပိုင် ပစ္စည်းများကို ထိန်းသိမ်းရန် _____ ဖြစ်သည်။", options: ["တာဝန်ရှိ", "မလိုလားအပ်", "ခွင့်ပြု", "တားမြစ်"], answer: 0 }
+      ];
+    }
+
     global.cachedQuestions = questions;
 
     const sanitized = questions.map((q, idx) => ({
       no: idx + 1,
-      id: q.id,
+      id: q.id || idx + 1,
       question: q.question,
       options: q.options
     }));
 
     res.json({ success: true, questions: sanitized });
   } catch (err) {
-    console.error("AI Generation Error:", err);
+    console.error("API Error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
