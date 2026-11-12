@@ -10,14 +10,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Initialize Groq API (Free Tier)
+// Initialize Groq API
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // Google Sheets Auth Setup
 const auth = new google.auth.GoogleAuth({
   credentials: {
     client_email: process.env.GOOGLE_CLIENT_EMAIL,
-    private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+    private_key: process.env.GOOGLE_PRIVATE_KEY ? process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n') : '',
   },
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
@@ -25,7 +25,7 @@ const auth = new google.auth.GoogleAuth({
 const PROCESS_SHEET_ID = process.env.PROCESS_GOOGLE_SHEET_ID;
 const DATABASE_SHEET_ID = process.env.DATABASE_GOOGLE_SHEET_ID;
 
-// WebDAV Configuration (ownCloud / Nextcloud for PDF storage)
+// WebDAV Configuration (ownCloud / Nextcloud)
 const WEBDAV_BASE_URL = process.env.WEBDAV_BASE_URL;
 const WEBDAV_USER = process.env.WEBDAV_USER;
 const WEBDAV_PASS = process.env.WEBDAV_PASS;
@@ -33,48 +33,52 @@ const WEBDAV_PUBLIC_VIEW_URL = process.env.WEBDAV_PUBLIC_VIEW_URL;
 
 // Helper: Read Data directly from Google Sheet ('Update' & 'Do & Dont')
 async function fetchProcessSheetData() {
-  const sheets = google.sheets({ version: 'v4', auth });
-  
-  const resUpdate = await sheets.spreadsheets.values.get({
-    spreadsheetId: PROCESS_SHEET_ID,
-    range: "'Update'!A:Z",
-  });
-  const resDoDont = await sheets.spreadsheets.values.get({
-    spreadsheetId: PROCESS_SHEET_ID,
-    range: "'Do & Dont'!A:Z",
-  });
+  try {
+    const sheets = google.sheets({ version: 'v4', auth });
+    
+    const resUpdate = await sheets.spreadsheets.values.get({
+      spreadsheetId: PROCESS_SHEET_ID,
+      range: "'Update'!A:Z",
+    });
+    const resDoDont = await sheets.spreadsheets.values.get({
+      spreadsheetId: PROCESS_SHEET_ID,
+      range: "'Do & Dont'!A:Z",
+    });
 
-  const updateRows = resUpdate.data.values || [];
-  const doDontRows = resDoDont.data.values || [];
+    const updateRows = resUpdate.data.values || [];
+    const doDontRows = resDoDont.data.values || [];
 
-  let combinedText = "=== PROCESS UPDATE DATA ===\n";
-  updateRows.forEach(row => combinedText += row.join(' | ') + '\n');
-  
-  combinedText += "\n=== DO & DONT POLICY DATA ===\n";
-  doDontRows.forEach(row => combinedText += row.join(' | ') + '\n');
+    let combinedText = "=== PROCESS UPDATE DATA ===\n";
+    updateRows.forEach(row => combinedText += row.join(' | ') + '\n');
+    
+    combinedText += "\n=== DO & DONT POLICY DATA ===\n";
+    doDontRows.forEach(row => combinedText += row.join(' | ') + '\n');
 
-  return combinedText.substring(0, 15000);
+    return combinedText.substring(0, 15000);
+  } catch (err) {
+    console.error("Error reading Google Sheets:", err.message);
+    throw new Error("Google Sheet မှ ဒေတာဖတ်ယူရာတွင် အမှားအယွင်းရှိနေပါသည်။ Sheet ID နှင့် Permission ကို စစ်ဆေးပါ။");
+  }
 }
 
-// 1. API: Generate 60 Questions using Groq AI from Google Sheet Data
+// 1. API: Generate 60 Questions using Groq AI
 app.get('/api/questions', async (req, res) => {
   try {
     const sheetDataText = await fetchProcessSheetData();
 
-    // Calling Groq API (Using Llama 3 model)
     const chatCompletion = await groq.chat.completions.create({
       messages: [
         {
           role: "system",
-          content: "You are an examiner. Analyze the company process and policy data and generate exactly 60 multiple-choice questions in Burmese language. Each question must have exactly 4 options and the zero-based index of the correct answer (0, 1, 2, or 3). Return ONLY a valid JSON array format, with no markdown code blocks or additional text: [{\"id\": 1, \"question\": \"...\", \"options\": [\"A\", \"B\", \"C\", \"D\"], \"answer\": 0}]"
+          content: "You are an expert examiner. Analyze the company process and policy data and generate exactly 60 multiple-choice questions in Burmese language based on the text. Each question must have exactly 4 options and the zero-based index of the correct answer (0, 1, 2, or 3). Return ONLY a valid JSON array format, with no markdown code blocks or additional text: [{\"id\": 1, \"question\": \"...\", \"options\": [\"A\", \"B\", \"C\", \"D\"], \"answer\": 0}]"
         },
         {
           role: "user",
           content: `Company Data:\n${sheetDataText}`
         }
       ],
-      model: "llama3-70b-8192", // Fast and powerful Groq model
-      temperature: 0.5,
+      model: "llama3-70b-8192",
+      temperature: 0.3,
     });
 
     let textResponse = chatCompletion.choices[0]?.message?.content || "";
@@ -92,8 +96,8 @@ app.get('/api/questions', async (req, res) => {
 
     res.json({ success: true, questions: sanitized });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, error: "Failed to generate questions using Groq AI." });
+    console.error("AI Generation Error:", err);
+    res.status(500).json({ success: false, error: err.message || "Failed to generate questions using Groq AI." });
   }
 });
 
@@ -115,10 +119,10 @@ async function createAndUploadPDF(fileName, title, contentData) {
 
   return new Promise((resolve, reject) => {
     doc.on('end', async () => {
-      let pdfBuffer = Buffer.concat(buffers);
-      const uploadUrl = `${WEBDAV_BASE_URL}/${fileName}`.replace(/([^:]\/)\/+/g, "$1");
-
       try {
+        let pdfBuffer = Buffer.concat(buffers);
+        const uploadUrl = `${WEBDAV_BASE_URL}/${fileName}`.replace(/([^:]\/)\/+/g, "$1");
+
         await axios.put(uploadUrl, pdfBuffer, {
           auth: { username: WEBDAV_USER, password: WEBDAV_PASS },
           headers: { 'Content-Type': 'application/pdf' }
@@ -142,7 +146,7 @@ app.post('/api/submit-exam', async (req, res) => {
 
     let score = 0;
     questions.forEach(q => {
-      if (answers[q.id] !== undefined && answers[q.id] === q.answer) {
+      if (answers && answers[q.id] !== undefined && answers[q.id] === q.answer) {
         score += 1;
       }
     });
@@ -171,6 +175,7 @@ app.post('/api/submit-exam', async (req, res) => {
 
     res.json({ success: true, submissionId: subId, score, pdfUrl });
   } catch (err) {
+    console.error("Submit Exam Error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -179,7 +184,7 @@ app.post('/api/submit-exam', async (req, res) => {
 app.post('/api/dashboard', async (req, res) => {
   const { password } = req.body;
   if (password !== '1366') {
-    return res.status(401).json({ success: false, message: 'Incorrect Password!' });
+    return res.status(401).json({ success: false, message: 'စကားဝှက် (Password) မှားယွင်းနေပါသည်။' });
   }
 
   try {
@@ -191,24 +196,25 @@ app.post('/api/dashboard', async (req, res) => {
     const rows = response.data.values || [];
     const data = rows.slice(1).map((row, idx) => ({
       rowIndex: idx + 2,
-      submissionId: row[0],
-      employeeName: row[1],
-      employeeId: row[2],
-      managerName: row[3],
-      examScore: row[4],
-      examPdf: row[5],
-      status: row[6],
-      feedbackRating: row[7],
-      feedbackScore: row[8],
-      totalScore: row[9],
-      finalRating: row[10],
-      finalPdf: row[11],
-      timestamp: row[12]
+      submissionId: row[0] || '',
+      employeeName: row[1] || '',
+      employeeId: row[2] || '',
+      managerName: row[3] || '',
+      examScore: row[4] || '0',
+      examPdf: row[5] || '',
+      status: row[6] || 'Pending',
+      feedbackRating: row[7] || '',
+      feedbackScore: row[8] || '',
+      totalScore: row[9] || '',
+      finalRating: row[10] || '',
+      finalPdf: row[11] || '',
+      timestamp: row[12] || ''
     }));
 
     res.json({ success: true, records: data });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error("Dashboard Error:", err);
+    res.status(500).json({ success: false, message: err.message || "Failed to load dashboard records." });
   }
 });
 
@@ -216,7 +222,7 @@ app.post('/api/dashboard', async (req, res) => {
 app.post('/api/submit-feedback', async (req, res) => {
   const { password, submissionId, rating } = req.body;
   if (password !== '1366') {
-    return res.status(401).json({ success: false, message: 'Password Access Denied!' });
+    return res.status(401).json({ success: false, message: 'စကားဝှက် (Password) မှားယွင်းနေပါသည်။' });
   }
 
   const ratingMap = { 0: 0, 1: 20, 2: 40, 3: 60, 4: 80, 5: 100 };
@@ -228,7 +234,7 @@ app.post('/api/submit-feedback', async (req, res) => {
       spreadsheetId: DATABASE_SHEET_ID,
       range: 'Exam_Records!A:M',
     });
-    const rows = response.data.values;
+    const rows = response.data.values || [];
     let rowIndex = -1;
     let examScore = 0;
     let empName = '', empId = '', mgrName = '';
@@ -280,7 +286,8 @@ app.post('/api/submit-feedback', async (req, res) => {
 
     res.json({ success: true, totalScore, finalRatingDesc, finalPdfUrl });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error("Feedback Error:", err);
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
