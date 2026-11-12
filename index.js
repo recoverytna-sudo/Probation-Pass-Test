@@ -46,7 +46,7 @@ function shuffleArray(array) {
   return array;
 }
 
-async function fetchStrictProcessSheetData() {
+async function fetchStrictBurmeseSheetData() {
   try {
     const sheets = google.sheets({ version: 'v4', auth });
     
@@ -71,17 +71,16 @@ async function fetchStrictProcessSheetData() {
     const updateRows = resUpdate.data.values || [];
     const doDontRows = resDoDont.data.values || [];
 
-    // Shuffle and pick random rows to ensure unique questions per exam
     const shuffledUpdate = shuffleArray([...updateRows]);
     const shuffledDoDont = shuffleArray([...doDontRows]);
 
-    const selectedUpdate = shuffledUpdate.slice(0, 40);
-    const selectedDoDont = shuffledDoDont.slice(0, 30);
+    const selectedUpdate = shuffledUpdate.slice(0, 45);
+    const selectedDoDont = shuffledDoDont.slice(0, 35);
 
-    let combinedText = `=== PROCESS DATA (${firstTabName}) ===\n`;
+    let combinedText = `=== SHEET DATA 1 (${firstTabName}) ===\n`;
     selectedUpdate.forEach(row => combinedText += row.join(' | ') + '\n');
     
-    combinedText += `\n=== POLICY DATA (${secondTabName}) ===\n`;
+    combinedText += `\n=== SHEET DATA 2 (${secondTabName}) ===\n`;
     selectedDoDont.forEach(row => combinedText += row.join(' | ') + '\n');
 
     return combinedText.substring(0, 8000);
@@ -93,20 +92,20 @@ async function fetchStrictProcessSheetData() {
 
 app.get('/api/questions', async (req, res) => {
   try {
-    const sheetDataText = await fetchStrictProcessSheetData();
+    const sheetDataText = await fetchStrictBurmeseSheetData();
     const chatCompletion = await groq.chat.completions.create({
       messages: [
         {
           role: "system",
-          content: "You are a strict questionnaire generator. Using ONLY the exact facts, sentences, and data provided in the text below, create exactly 60 multiple-choice questions. Do NOT invent outside facts or change the original meaning. Formulate the questions as sentence-completion or fill-in-the-blank style based directly on the text. Each question must have 4 options and the zero-based index of the correct answer (0, 1, 2, or 3). Return ONLY a valid JSON array format, with no markdown or extra text: [{\"id\": 1, \"question\": \"...\", \"options\": [\"A\", \"B\", \"C\", \"D\"], \"answer\": 0}]"
+          content: "You are a precise data formatter. Task: Create exactly 60 fill-in-the-blank (ကွက်လပ်ဖြည့်) multiple-choice questions strictly using ONLY the exact Burmese text and sentences provided below. Do NOT translate to English. Do NOT rewrite, paraphrase, or change the meaning of the original sentences. For each question, take a complete sentence or phrase from the source text, replace one key word or phrase with '_____' to form the question, and provide the correct missing word as one of the 4 options, while the other 3 options are plausible alternative words from the text. Return ONLY a valid JSON array format, with no markdown or extra text: [{\"id\": 1, \"question\": \"... (_____)...\", \"options\": [\"မှန်ကန်သောစာသား\", \"အခြား၁\", \"အခြား၂\", \"အခြား၃\"], \"answer\": 0}]"
         },
         {
           role: "user",
-          content: `Source Data:\n${sheetDataText}`
+          content: `Source Burmese Text:\n${sheetDataText}`
         }
       ],
       model: "openai/gpt-oss-120b",
-      temperature: 0.2, // Low temperature to stick strictly to source data facts
+      temperature: 0.1, // Near zero to preserve exact native words and prevent creative rewriting
       max_tokens: 6000,
       reasoning_format: "hidden"
     });
@@ -296,7 +295,7 @@ app.post('/api/submit-feedback', async (req, res) => {
       'Submission ID': submissionId,
       'Employee Name': empName,
       'Employee ID': empId,
-      'Manager Name': managerName,
+      'Manager Name': mgrName,
       'Exam Score': `${examScore} Marks`,
       'Feedback Rating': `Rating ${rating} (${feedbackScore} Marks)`,
       'Total Score': `${totalScore} Marks`,
