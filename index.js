@@ -58,7 +58,7 @@ async function fetchQuestionsFromSheet() {
       throw new Error("Google Sheet 'Multiple Choose' Tab ထဲတွင် မေးခွန်းများ မရှိသေးပါ။");
     }
 
-    const dataRows = rows.slice(1); // Skip header
+    const dataRows = rows.slice(1);
 
     let allQuestions = dataRows.map((row, idx) => {
       const questionText = row[1] || '';
@@ -77,10 +77,7 @@ async function fetchQuestionsFromSheet() {
       };
     }).filter(q => q.question && q.options.length > 0);
 
-    // Randomize questions
     shuffleArray(allQuestions);
-
-    // Take up to 60 questions (or all if less than 60)
     const selectedQuestions = allQuestions.slice(0, 60);
 
     return selectedQuestions.map((q, index) => ({
@@ -148,7 +145,8 @@ async function createAndUploadPDF(fileName, title, contentData) {
   });
 }
 
-app.post('/api/submit-exam', async (req, res) => {
+// Handler for submitting exam (covering multiple possible endpoint paths)
+async function handleExamSubmission(req, res) {
   try {
     const { employeeName, employeeId, managerName, answers } = req.body;
     const questions = global.cachedQuestions || [];
@@ -166,7 +164,7 @@ app.post('/api/submit-exam', async (req, res) => {
       'Employee Name': employeeName,
       'Employee ID': employeeId,
       'Manager Name': managerName,
-      'Exam Score': `${score} / ${questions.length}`,
+      'Exam Score': `${score} / ${questions.length || 60}`,
       'Status': 'Pending Manager Feedback'
     };
 
@@ -187,7 +185,11 @@ app.post('/api/submit-exam', async (req, res) => {
     console.error("Submit Exam Error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
-});
+}
+
+app.post('/api/submit-exam', handleExamSubmission);
+app.post('/api/submit', handleExamSubmission);
+app.post('/api/exam/submit', handleExamSubmission);
 
 app.post('/api/dashboard', async (req, res) => {
   const { password } = req.body;
