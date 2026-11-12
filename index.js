@@ -15,7 +15,7 @@ app.use(express.urlencoded({ extended: true }));
 const tempKeyPath = path.join('/tmp', 'sa-key.json');
 try {
   let saJsonString = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '{}';
-  if (saJsonString.startsWith('"' ) && saJsonString.endsWith('"')) {
+  if (saJsonString.startsWith('"') && saJsonString.endsWith('"')) {
     saJsonString = saJsonString.slice(1, -1);
   }
   fs.writeFileSync(tempKeyPath, saJsonString);
@@ -91,10 +91,16 @@ async function fetchQuestionsFromSheet() {
   }
 }
 
-// Questions endpoints
+// Global backup storage to handle serverless state loss
+global.activeExamCache = global.activeExamCache || {};
+
 const handleGetQuestions = async (req, res) => {
   try {
     const questions = await fetchQuestionsFromSheet();
+    const sessionId = 'SES-' + Date.now();
+    
+    // Store in global cache mapped with a session key if needed, or keep standard cache
+    global.activeExamCache[sessionId] = questions;
     global.cachedQuestions = questions;
 
     const sanitized = questions.map((q) => ({
@@ -104,7 +110,7 @@ const handleGetQuestions = async (req, res) => {
       options: q.options
     }));
 
-    res.json({ success: true, questions: sanitized });
+    res.json({ success: true, sessionId, questions: sanitized });
   } catch (err) {
     console.error("Questions API Error:", err);
     res.status(500).json({ success: false, error: err.message });
@@ -157,21 +163,30 @@ async function createAndUploadPDF(fileName, title, contentData) {
 async function handleExamSubmission(req, res) {
   try {
     const { employeeName, employeeId, managerName, answers } = req.body;
-    const questions = global.cachedQuestions || [];
+    
+    // Fallback fetch if cache is empty
+    let questions = global.cachedQuestions;
+    if (!questions || questions.length === 0) {
+      questions = await fetchQuestionsFromSheet();
+    }
 
     let score = 0;
-    questions.forEach(q => {
-      if (answers && answers[q.id] !== undefined && answers[q.id] === q.answer) {
-        score += 1;
-      }
-    });
+    if (answers) {
+      questions.forEach(q => {
+        // Match answers flexibly by ID
+        const userAns = answers[q.id] !== undefined ? answers[q.id] : answers[String(q.id)];
+        if (userAns !== undefined && parseInt(userAns) === parseInt(q.answer)) {
+          score += 1;
+        }
+      });
+    }
 
     const subId = 'SUB-' + Date.now();
     const pdfData = {
       'Submission ID': subId,
-      'Employee Name': employeeName,
-      'Employee ID': employeeId,
-      'Manager Name': managerName,
+      'Employee Name': employeeName || 'Unknown',
+      'Employee ID': employeeId || 'Unknown',
+      'Manager Name': managerName || 'Unknown',
       'Exam Score': `${score} / ${questions.length || 60}`,
       'Status': 'Pending Manager Feedback'
     };
@@ -305,7 +320,7 @@ async function handleFeedback(req, res) {
   }
 }
 
-// Explicit routes
+// Explicit routes for all possible naming conventions
 app.post('/api/submit-exam', handleExamSubmission);
 app.post('/api/submit', handleExamSubmission);
 app.post('/api/exam/submit', handleExamSubmission);
@@ -318,7 +333,7 @@ app.post('/dashboard', handleDashboard);
 app.post('/api/submit-feedback', handleFeedback);
 app.post('/submit-feedback', handleFeedback);
 
-// UNIVERSAL CATCH-ALL POST ROUTE to guarantee 100% no 404 on any Odoo submission URL variation
+// UNIVERSAL CATCH-ALL POST ROUTE to prevent any 404 error
 app.post('*', (req, res) => {
   const urlPath = req.path.toLowerCase();
   if (urlPath.includes('dashboard')) {
@@ -327,9 +342,8 @@ app.post('*', (req, res) => {
   if (urlPath.includes('feedback')) {
     return handleFeedback(req, res);
   }
-  // Default to exam submission for any other POST path
   return handleExamSubmission(req, res);
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server running on port `${PORT}`));
