@@ -82,16 +82,13 @@ app.get('/api/questions', async (req, res) => {
     const chatCompletion = await groq.chat.completions.create({
       messages: [
         {
-          role: "system",
-          content: "You are an expert examiner. Analyze the company process and policy data and generate exactly 60 multiple-choice questions in Burmese language based on the text. Each question must have exactly 4 options and the zero-based index of the correct answer (0, 1, 2, or 3). Return ONLY a valid JSON array format, with no markdown code blocks or additional text: [{\"id\": 1, \"question\": \"...\", \"options\": [\"A\", \"B\", \"C\", \"D\"], \"answer\": 0}]"
-        },
-        {
           role: "user",
-          content: `Company Data:\n${sheetDataText}`
+          content: `Analyze the following company process and policy data and generate exactly 60 multiple-choice questions in Burmese language. Each question must have exactly 4 options and the zero-based index of the correct answer (0, 1, 2, or 3). Return ONLY a valid JSON array format, with no markdown code blocks or additional text: [{\"id\": 1, \"question\": \"...\", \"options\": [\"A\", \"B\", \"C\", \"D\"], \"answer\": 0}]\n\nCompany Data:\n${sheetDataText}`
         }
       ],
-      model: "llama-3.1-8b-instant", // Working & Verified Groq Model
-      temperature: 0.3,
+      model: "openai/gpt-oss-120b", // Correct official Groq model ID for GPT-OSS 120B
+      temperature: 0.5,
+      reasoning_format: "hidden"
     });
 
     let textResponse = chatCompletion.choices[0]?.message?.content || "";
