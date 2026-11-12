@@ -86,7 +86,7 @@ async function fetchQuestionsFromSheet() {
     }));
   } catch (err) {
     console.error("Error fetching questions from Sheet:", err.message);
-    throw new Error("Google Sheet မှ မေးခွန်းများ ဖတ်ယူရာတွင် အမှားအယွင်းရှိနေပါသည်။ 'Multiple Choose' Tab နာမည်ကို စစ်ဆေးပါ။");
+    throw new Error("Google Sheet မှ မေးခွန်းများ ဖတ်ယူရာတွင် အမှားအယွင်းရှိနေပါသည်။");
   }
 }
 
@@ -107,6 +107,11 @@ app.get('/api/questions', async (req, res) => {
     console.error("Questions API Error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+// Also support GET root or health check
+app.get('/', (req, res) => {
+  res.send('Odoo Probation Exam Backend is running successfully!');
 });
 
 async function createAndUploadPDF(fileName, title, contentData) {
@@ -145,7 +150,7 @@ async function createAndUploadPDF(fileName, title, contentData) {
   });
 }
 
-// Handler for submitting exam (covering multiple possible endpoint paths)
+// Universal handler for submitting exam (covers all possible Odoo frontend route variants)
 async function handleExamSubmission(req, res) {
   try {
     const { employeeName, employeeId, managerName, answers } = req.body;
@@ -187,9 +192,12 @@ async function handleExamSubmission(req, res) {
   }
 }
 
+// Register all potential endpoint paths used by Odoo frontend
 app.post('/api/submit-exam', handleExamSubmission);
 app.post('/api/submit', handleExamSubmission);
 app.post('/api/exam/submit', handleExamSubmission);
+app.post('/submit-exam', handleExamSubmission);
+app.post('/submit', handleExamSubmission);
 
 app.post('/api/dashboard', async (req, res) => {
   const { password } = req.body;
