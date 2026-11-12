@@ -90,7 +90,7 @@ app.get('/api/questions', async (req, res) => {
           content: `Company Data:\n${sheetDataText}`
         }
       ],
-      model: "x-ai/grok-4-fast:free", // Updated to match your active OpenRouter/API model
+      model: "gpt-oss-120b", // Updated to gpt-oss-120b as requested
       temperature: 0.3,
     });
 
