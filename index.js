@@ -90,7 +90,7 @@ app.get('/api/questions', async (req, res) => {
           content: `Company Data:\n${sheetDataText}`
         }
       ],
-      model: "llama-3.1-8b-instant", // Stable and active Groq model
+      model: "x-ai/grok-4-fast:free", // Updated to match your active OpenRouter/API model
       temperature: 0.3,
     });
 
