@@ -90,7 +90,7 @@ app.get('/api/questions', async (req, res) => {
           content: `Company Data:\n${sheetDataText}`
         }
       ],
-      model: "gpt-oss-120b", // Updated to gpt-oss-120b as requested
+      model: "llama-3.1-8b-instant", // Working & Verified Groq Model
       temperature: 0.3,
     });
 
