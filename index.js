@@ -44,7 +44,6 @@ function shuffleArray(array) {
   return array;
 }
 
-// In-memory Session Store for Serverless Environment
 global.examSessions = global.examSessions || {};
 
 async function fetchQuestionsFromSheet() {
@@ -78,23 +77,25 @@ async function fetchQuestionsFromSheet() {
       });
     });
 
+    if (allQuestions.length === 0) {
+      throw new Error("Valid questions could not be parsed from sheet.");
+    }
+
     shuffleArray(allQuestions);
-    const selectedQuestions = allQuestions.slice(0, 40); // ၄၀ လုံး Random ထုတ်မည်
+    const selectedQuestions = allQuestions.slice(0, 40);
 
     return selectedQuestions;
   } catch (err) {
-    console.error("Error fetching questions from Sheet:", err.message);
-    throw new Error("Google Sheet မှ မေးခွန်းများ ဖတ်ယူရာတွင် အမှားအယွင်းရှိနေပါသည်။");
+    console.error("Detailed Sheet Fetch Error:", err.message);
+    throw new Error(err.message);
   }
 }
 
-// 1. Get Questions & Create Session
 app.get('/api/questions', async (req, res) => {
   try {
     const questions = await fetchQuestionsFromSheet();
     const sessionKey = "exam_session_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
     
-    // Store in global cache with correct answers secured on server side
     global.examSessions[sessionKey] = questions;
 
     const clientQuestions = questions.map((q, index) => ({
@@ -112,21 +113,17 @@ app.get('/api/questions', async (req, res) => {
       questions: clientQuestions
     });
   } catch (err) {
-    console.error("Questions API Error:", err);
+    console.error("Questions API Error:", err.message);
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.status(500).json({ status: "error", message: err.message });
   }
 });
 
-app.get('/questions', async (req, res) => {
-  return res.redirect('/api/questions');
-});
-
 app.get('/', (req, res) => {
-  res.send('Odoo Probation Exam Backend (Node.js/Vercel) is running successfully!');
+  res.send('Odoo Probation Exam Backend is running successfully!');
 });
 
-// PDF Generation and WebDAV Upload
+// PDF & Submit handlers
 async function createAndUploadPDF(subId, userInfo, score, total, percentage, passStatus, detailedResults) {
   const doc = new PDFDocument({ margin: 40 });
   let buffers = [];
@@ -141,18 +138,14 @@ async function createAndUploadPDF(subId, userInfo, score, total, percentage, pas
   doc.text(`Date: ${userInfo.date}`);
   doc.text(`Finance Name: ${userInfo.name}`);
   doc.text(`Employee ID: ${userInfo.id}`);
-  doc.text(`Time: ${new Date().toLocaleString()}`);
   doc.text(`Score: ${score} / ${total} (${percentage}%) - Status: ${passStatus}`);
   doc.moveDown();
-
-  doc.fontSize(12).text('Detailed Answers Review:', { underline: true });
-  doc.moveDown(0.5);
 
   detailedResults.forEach((d, idx) => {
     doc.fontSize(9).fillColor(d.isCorrect ? '#008000' : '#FF0000');
     doc.text(`${idx + 1}. Q: ${d.question}`);
-    doc.text(`   - Your Answer: ${d.userAnswer} | Correct Answer: ${d.correctAnswerText} [${d.isCorrect ? 'CORRECT' : 'INCORRECT'}]`);
-    doc.moveDown(0.3);
+    doc.text(`   - Your Answer: ${d.userAnswer} | Correct Answer: ${d.correctAnswerText}`);
+    doc.moveDown(0.2);
   });
 
   doc.end();
@@ -161,7 +154,6 @@ async function createAndUploadPDF(subId, userInfo, score, total, percentage, pas
     doc.on('end', async () => {
       try {
         let pdfBuffer = Buffer.concat(buffers);
-        
         const safeName = userInfo.name.replace(/[^a-zA-Z0-9]/g, '_') || 'Employee';
         const safeId = userInfo.id.replace(/[^a-zA-Z0-9]/g, '_') || 'ID';
         const fileName = `${safeName}_${safeId}_${subId}_Exam_Result.pdf`;
@@ -176,7 +168,7 @@ async function createAndUploadPDF(subId, userInfo, score, total, percentage, pas
         const downloadLink = `${WEBDAV_PUBLIC_VIEW_URL}/${fileName}`;
         resolve({ pdfBuffer, downloadLink, fileName });
       } catch (error) {
-        console.error("WebDAV Upload Warning:", error.response?.data || error.message);
+        console.error("WebDAV Upload Warning:", error.message);
         resolve({ pdfBuffer: Buffer.from([]), downloadLink: "", fileName: `${subId}_Exam_Result.pdf` });
       }
     });
@@ -185,14 +177,13 @@ async function createAndUploadPDF(subId, userInfo, score, total, percentage, pas
 
 global.pdfBufferStore = global.pdfBufferStore || {};
 
-// 2. Submit Exam & Check Answers
 async function handleExamSubmission(req, res) {
   try {
     const { employeeName, employeeId, managerName, answers, sessionKey } = req.body;
     
     let questions = sessionKey ? global.examSessions[sessionKey] : null;
     if (!questions) {
-      questions = await fetchQuestionsFromSheet(); // Fallback if session expired
+      questions = await fetchQuestionsFromSheet();
     }
 
     let score = 0;
@@ -250,13 +241,12 @@ async function handleExamSubmission(req, res) {
       date: new Date().toLocaleDateString()
     };
 
-    const { pdfBuffer, downloadLink, fileName } = await createAndUploadPDF(
+    const { pdfBuffer, downloadLink } = await createAndUploadPDF(
       subId, userInfo, score, totalQuestions, percentage, passStatus, detailedResults
     );
 
     global.pdfBufferStore[subId] = pdfBuffer;
 
-    // Save Record to Google Sheets Database
     const sheets = google.sheets({ version: 'v4', auth });
     await sheets.spreadsheets.values.append({
       spreadsheetId: DATABASE_SHEET_ID,
@@ -279,7 +269,7 @@ async function handleExamSubmission(req, res) {
       detailedResults: detailedResults
     });
   } catch (err) {
-    console.error("Submit Exam Error:", err);
+    console.error("Submit Exam Error:", err.message);
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.status(500).json({ status: "error", message: err.message });
   }
