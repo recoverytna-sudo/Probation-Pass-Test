@@ -42,28 +42,37 @@ async function fetchProcessSheetData() {
   try {
     const sheets = google.sheets({ version: 'v4', auth });
     
+    const spreadsheet = await sheets.spreadsheets.get({
+      spreadsheetId: PROCESS_SHEET_ID,
+    });
+    
+    const sheetList = spreadsheet.data.sheets;
+    const firstTabName = sheetList[0]?.properties?.title || 'Sheet1';
+    const secondTabName = sheetList[1]?.properties?.title || firstTabName;
+
     const resUpdate = await sheets.spreadsheets.values.get({
       spreadsheetId: PROCESS_SHEET_ID,
-      range: "'Update'!A:Z",
+      range: `'${firstTabName}'!A:Z`,
     });
+    
     const resDoDont = await sheets.spreadsheets.values.get({
       spreadsheetId: PROCESS_SHEET_ID,
-      range: "'Do & Dont'!A:Z",
+      range: `'${secondTabName}'!A:Z`,
     });
 
     const updateRows = resUpdate.data.values || [];
     const doDontRows = resDoDont.data.values || [];
 
-    let combinedText = "=== PROCESS UPDATE DATA ===\n";
+    let combinedText = `=== PROCESS DATA (${firstTabName}) ===\n`;
     updateRows.forEach(row => combinedText += row.join(' | ') + '\n');
     
-    combinedText += "\n=== DO & DONT POLICY DATA ===\n";
+    combinedText += `\n=== POLICY DATA (${secondTabName}) ===\n`;
     doDontRows.forEach(row => combinedText += row.join(' | ') + '\n');
 
     return combinedText.substring(0, 15000);
   } catch (err) {
     console.error("Error reading Google Sheets:", err.message);
-    throw new Error("Google Sheet မှ ဒေတာဖတ်ယူရာတွင် အမှားအယွင်းရှိနေပါသည်။ Update နှင့် Do & Dont Tab နာမည်များကို စစ်ဆေးပါ။");
+    throw new Error("Google Sheet မှ ဒေတာဖတ်ယူရာတွင် အမှားအယွင်းရှိနေပါသည်။ Sheet ID နှင့် Sharing Permission ကို စစ်ဆေးပါ။");
   }
 }
 
@@ -81,7 +90,7 @@ app.get('/api/questions', async (req, res) => {
           content: `Company Data:\n${sheetDataText}`
         }
       ],
-      model: "llama3-70b-8192",
+      model: "llama-3.3-70b-versatile", // Updated to active Groq model
       temperature: 0.3,
     });
 
