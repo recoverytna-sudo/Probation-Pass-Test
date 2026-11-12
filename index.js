@@ -10,11 +10,12 @@ require('dotenv').config();
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 const tempKeyPath = path.join('/tmp', 'sa-key.json');
 try {
   let saJsonString = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '{}';
-  if (saJsonString.startsWith('"') && saJsonString.endsWith('"')) {
+  if (saJsonString.startsWith('"' ) && saJsonString.endsWith('"')) {
     saJsonString = saJsonString.slice(1, -1);
   }
   fs.writeFileSync(tempKeyPath, saJsonString);
@@ -90,7 +91,8 @@ async function fetchQuestionsFromSheet() {
   }
 }
 
-app.get('/api/questions', async (req, res) => {
+// Questions endpoints
+const handleGetQuestions = async (req, res) => {
   try {
     const questions = await fetchQuestionsFromSheet();
     global.cachedQuestions = questions;
@@ -107,9 +109,10 @@ app.get('/api/questions', async (req, res) => {
     console.error("Questions API Error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
-});
+};
 
-// Also support GET root or health check
+app.get('/api/questions', handleGetQuestions);
+app.get('/questions', handleGetQuestions);
 app.get('/', (req, res) => {
   res.send('Odoo Probation Exam Backend is running successfully!');
 });
@@ -150,7 +153,7 @@ async function createAndUploadPDF(fileName, title, contentData) {
   });
 }
 
-// Universal handler for submitting exam (covers all possible Odoo frontend route variants)
+// Universal handler for submitting exam
 async function handleExamSubmission(req, res) {
   try {
     const { employeeName, employeeId, managerName, answers } = req.body;
@@ -192,14 +195,8 @@ async function handleExamSubmission(req, res) {
   }
 }
 
-// Register all potential endpoint paths used by Odoo frontend
-app.post('/api/submit-exam', handleExamSubmission);
-app.post('/api/submit', handleExamSubmission);
-app.post('/api/exam/submit', handleExamSubmission);
-app.post('/submit-exam', handleExamSubmission);
-app.post('/submit', handleExamSubmission);
-
-app.post('/api/dashboard', async (req, res) => {
+// Dashboard handler
+async function handleDashboard(req, res) {
   const { password } = req.body;
   if (password !== '1366') {
     return res.status(401).json({ success: false, message: 'စကားဝှက် (Password) မှားယွင်းနေပါသည်။' });
@@ -234,9 +231,10 @@ app.post('/api/dashboard', async (req, res) => {
     console.error("Dashboard Error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
-});
+}
 
-app.post('/api/submit-feedback', async (req, res) => {
+// Feedback handler
+async function handleFeedback(req, res) {
   const { password, submissionId, rating } = req.body;
   if (password !== '1366') {
     return res.status(401).json({ success: false, message: 'စကားဝှက် (Password) မှားယွင်းနေပါသည်။' });
@@ -305,6 +303,32 @@ app.post('/api/submit-feedback', async (req, res) => {
     console.error("Feedback Error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
+}
+
+// Explicit routes
+app.post('/api/submit-exam', handleExamSubmission);
+app.post('/api/submit', handleExamSubmission);
+app.post('/api/exam/submit', handleExamSubmission);
+app.post('/submit-exam', handleExamSubmission);
+app.post('/submit', handleExamSubmission);
+
+app.post('/api/dashboard', handleDashboard);
+app.post('/dashboard', handleDashboard);
+
+app.post('/api/submit-feedback', handleFeedback);
+app.post('/submit-feedback', handleFeedback);
+
+// UNIVERSAL CATCH-ALL POST ROUTE to guarantee 100% no 404 on any Odoo submission URL variation
+app.post('*', (req, res) => {
+  const urlPath = req.path.toLowerCase();
+  if (urlPath.includes('dashboard')) {
+    return handleDashboard(req, res);
+  }
+  if (urlPath.includes('feedback')) {
+    return handleFeedback(req, res);
+  }
+  // Default to exam submission for any other POST path
+  return handleExamSubmission(req, res);
 });
 
 const PORT = process.env.PORT || 3000;
