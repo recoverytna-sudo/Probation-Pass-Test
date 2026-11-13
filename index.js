@@ -44,13 +44,13 @@ function shuffleArray(array) {
   return array;
 }
 
-// Google Sheet မှ မေးခွန်း ၁၀၀ ကျော်အားလုံးကို ဖတ်ပြီး ၆၀ ပုဒ် တိတိ Random ဆွဲထုတ်မည်
+// Google Sheet မှ မေးခွန်းအားလုံးကို Range A1:G300 ဖြင့် ဖတ်ယူပြီး ၆၀ ပုဒ် တိတိ Random ထုတ်ပေးမည်
 async function fetchQuestionsFromSheet() {
   try {
     const sheets = google.sheets({ version: 'v4', auth });
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: PROCESS_SHEET_ID,
-      range: "'Multiple Choose'!A1:G200",
+      range: "'Multiple Choose'!A1:G300",
     });
 
     const rows = response.data.values || [];
@@ -59,9 +59,12 @@ async function fetchQuestionsFromSheet() {
     }
 
     const dataRows = rows.slice(1);
-    let allQuestions = dataRows.map((row, idx) => {
+    let allQuestions = [];
+
+    dataRows.forEach((row, idx) => {
       const questionText = row[1] !== undefined && row[1] !== null ? String(row[1]).trim() : '';
-      
+      if (questionText === '') return;
+
       const options = [row[2], row[3], row[4], row[5]]
         .filter(opt => opt !== undefined && opt !== null && String(opt).trim() !== '')
         .map(opt => String(opt).trim());
@@ -71,19 +74,19 @@ async function fetchQuestionsFromSheet() {
         correctAnsRaw = 0;
       }
 
-      return {
+      allQuestions.push({
         id: idx + 1,
         question: questionText,
         options: options,
         answer: correctAnsRaw
-      };
-    }).filter(q => q.question !== '' && q.options.length > 0);
+      });
+    });
 
-    // ကျပန်း (Random) ရောနှောမည်
+    console.log(`Total valid questions loaded from sheet: ${allQuestions.length}`);
+
     shuffleArray(allQuestions);
-    
-    // မေးခွန်း စုစုပေါင်း ၆၀ ပုဒ် တိတိ ထုတ်ယူမည်
-    const selectedQuestions = allQuestions.slice(0, 60);
+    const takeCount = Math.min(60, allQuestions.length);
+    const selectedQuestions = allQuestions.slice(0, takeCount);
 
     return selectedQuestions.map((q, index) => ({
       ...q,
@@ -122,7 +125,7 @@ app.get('/', (req, res) => {
   res.send('Odoo Probation Exam Backend is running successfully!');
 });
 
-// PDF Generation
+// PDF Generation with Pyidaungsu Burmese Font Support
 async function createDetailedExamPDF(subId, employeeName, employeeId, managerName, score, totalQuestions, detailedReview) {
   const doc = new PDFDocument({ margin: 40 });
   let buffers = [];
@@ -211,7 +214,7 @@ async function handleExamSubmission(req, res) {
     const sheets = google.sheets({ version: 'v4', auth });
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: PROCESS_SHEET_ID,
-      range: "'Multiple Choose'!A1:G200",
+      range: "'Multiple Choose'!A1:G300",
     });
     const rows = response.data.values || [];
     const dataRows = rows.slice(1);
@@ -470,7 +473,7 @@ app.post('*', (req, res) => {
   if (urlPath.includes('feedback')) {
     return handleFeedback(req, res);
   }
-  return handleExamSessionSubmission(req, res) || handleExamSubmission(req, res);
+  return handleExamSubmission(req, res);
 });
 
 const PORT = process.env.PORT || 3000;
