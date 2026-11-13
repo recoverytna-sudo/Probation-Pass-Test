@@ -44,13 +44,13 @@ function shuffleArray(array) {
   return array;
 }
 
+// Google Sheet မှ မေးခွန်း ၁၀၀ ကျော်အားလုံးကို ဖတ်ပြီး ၆၀ ပုဒ် တိတိ Random ဆွဲထုတ်မည်
 async function fetchQuestionsFromSheet() {
   try {
     const sheets = google.sheets({ version: 'v4', auth });
-    // Range ကို A1:G1000 အထိ အပြည့်ယူထားသဖြင့် အောက်ဆုံးမှ ထပ်တိုးမေးခွန်းအားလုံး ပါဝင်မည်
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: PROCESS_SHEET_ID,
-      range: "'Multiple Choose'!A1:G1000",
+      range: "'Multiple Choose'!A1:G200",
     });
 
     const rows = response.data.values || [];
@@ -62,7 +62,6 @@ async function fetchQuestionsFromSheet() {
     let allQuestions = dataRows.map((row, idx) => {
       const questionText = row[1] !== undefined && row[1] !== null ? String(row[1]).trim() : '';
       
-      // Option တန်ဖိုးများသည် 0 ဖြစ်နေလျှင်ပင် မပျောက်သွားစေရန် String ပြောင်းပြီး စစ်ဆေးခြင်း
       const options = [row[2], row[3], row[4], row[5]]
         .filter(opt => opt !== undefined && opt !== null && String(opt).trim() !== '')
         .map(opt => String(opt).trim());
@@ -80,10 +79,10 @@ async function fetchQuestionsFromSheet() {
       };
     }).filter(q => q.question !== '' && q.options.length > 0);
 
-    console.log(`Total valid questions loaded from sheet: ${allQuestions.length}`);
-
+    // ကျပန်း (Random) ရောနှောမည်
     shuffleArray(allQuestions);
-    // မေးခွန်း စုစုပေါင်း ၆၀ ရှိလျှင် ၆၀ လုံး အပြည့်ယူမည်
+    
+    // မေးခွန်း စုစုပေါင်း ၆၀ ပုဒ် တိတိ ထုတ်ယူမည်
     const selectedQuestions = allQuestions.slice(0, 60);
 
     return selectedQuestions.map((q, index) => ({
@@ -109,7 +108,7 @@ const handleGetQuestions = async (req, res) => {
     }));
 
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.json({ success: true, totalLoaded: sanitized.length, questions: sanitized });
+    res.json({ success: true, total: sanitized.length, questions: sanitized });
   } catch (err) {
     console.error("Questions API Error:", err);
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -123,13 +122,12 @@ app.get('/', (req, res) => {
   res.send('Odoo Probation Exam Backend is running successfully!');
 });
 
-// Create Detailed PDF with Burmese Unicode Support and Employee Name/ID in filename
+// PDF Generation
 async function createDetailedExamPDF(subId, employeeName, employeeId, managerName, score, totalQuestions, detailedReview) {
   const doc = new PDFDocument({ margin: 40 });
   let buffers = [];
   doc.on('data', buffers.push.bind(buffers));
 
-  // Vercel Serverless Environment တွင် path.resolve ဖြင့် Font ရှာဖွေခြင်း
   const possibleFontPaths = [
     path.join(__dirname, 'Pyidaungsu.ttf'),
     path.join(process.cwd(), 'Pyidaungsu.ttf'),
@@ -147,7 +145,6 @@ async function createDetailedExamPDF(subId, employeeName, employeeId, managerNam
   }
 
   if (!fontLoaded) {
-    console.warn("Pyidaungsu.ttf not found! Falling back to Helvetica.");
     doc.font('Helvetica');
   }
   
@@ -182,7 +179,6 @@ async function createDetailedExamPDF(subId, employeeName, employeeId, managerNam
     doc.on('end', async () => {
       try {
         let pdfBuffer = Buffer.concat(buffers);
-        
         const safeName = employeeName.replace(/[^a-zA-Z0-9\u1000-\u109F]/g, '_') || 'Employee';
         const safeId = employeeId.replace(/[^a-zA-Z0-9]/g, '_') || 'ID';
         const fileName = `${safeName}_${safeId}_${subId}_Exam_Result.pdf`;
@@ -197,7 +193,7 @@ async function createDetailedExamPDF(subId, employeeName, employeeId, managerNam
         const downloadLink = `${WEBDAV_PUBLIC_VIEW_URL}/${fileName}`;
         resolve({ pdfBuffer, downloadLink, fileName });
       } catch (error) {
-        console.error("WebDAV Upload Warning:", error.response?.data || error.message);
+        console.error("WebDAV Upload Warning:", error.message);
         const safeName = employeeName.replace(/[^a-zA-Z0-9]/g, '_') || 'Employee';
         const safeId = employeeId.replace(/[^a-zA-Z0-9]/g, '_') || 'ID';
         resolve({ pdfBuffer: Buffer.concat(buffers), downloadLink: "", fileName: `${safeName}_${safeId}_${subId}_Exam_Result.pdf` });
@@ -210,11 +206,46 @@ global.pdfBufferStore = global.pdfBufferStore || {};
 
 async function handleExamSubmission(req, res) {
   try {
-    const { employeeName, employeeId, managerName, answers } = req.body;
+    const { employeeName, employeeId, managerName, answers, questionIds } = req.body;
     
-    let questions = global.cachedQuestions;
-    if (!questions || questions.length === 0) {
-      questions = await fetchQuestionsFromSheet();
+    const sheets = google.sheets({ version: 'v4', auth });
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: PROCESS_SHEET_ID,
+      range: "'Multiple Choose'!A1:G200",
+    });
+    const rows = response.data.values || [];
+    const dataRows = rows.slice(1);
+    
+    let allQuestionsMap = {};
+    dataRows.forEach((row, idx) => {
+      const qId = idx + 1;
+      const questionText = row[1] !== undefined && row[1] !== null ? String(row[1]).trim() : '';
+      const options = [row[2], row[3], row[4], row[5]]
+        .filter(opt => opt !== undefined && opt !== null && String(opt).trim() !== '')
+        .map(opt => String(opt).trim());
+      
+      let correctAnsRaw = parseInt(row[6]) - 1;
+      if (isNaN(correctAnsRaw) || correctAnsRaw < 0 || correctAnsRaw >= options.length) {
+        correctAnsRaw = 0;
+      }
+
+      if (questionText !== '' && options.length > 0) {
+        allQuestionsMap[qId] = {
+          id: qId,
+          question: questionText,
+          options: options,
+          answer: correctAnsRaw
+        };
+      }
+    });
+
+    let questions = [];
+    if (Array.isArray(questionIds) && questionIds.length > 0) {
+      questions = questionIds.map(id => allQuestionsMap[id]).filter(Boolean);
+    } else if (global.cachedQuestions && global.cachedQuestions.length > 0) {
+      questions = global.cachedQuestions;
+    } else {
+      questions = Object.values(allQuestionsMap).slice(0, 60);
     }
 
     let score = 0;
@@ -244,7 +275,6 @@ async function handleExamSubmission(req, res) {
 
     global.pdfBufferStore[subId] = { buffer: pdfBuffer, fileName: fileName };
 
-    const sheets = google.sheets({ version: 'v4', auth });
     await sheets.spreadsheets.values.append({
       spreadsheetId: DATABASE_SHEET_ID,
       range: "'Exam_Records'!A:M",
@@ -440,7 +470,7 @@ app.post('*', (req, res) => {
   if (urlPath.includes('feedback')) {
     return handleFeedback(req, res);
   }
-  return handleExamSubmission(req, res);
+  return handleExamSessionSubmission(req, res) || handleExamSubmission(req, res);
 });
 
 const PORT = process.env.PORT || 3000;
