@@ -47,9 +47,10 @@ function shuffleArray(array) {
 async function fetchQuestionsFromSheet() {
   try {
     const sheets = google.sheets({ version: 'v4', auth });
+    // Range ကို A1:G1000 အထိ အပြည့်ယူထားသဖြင့် အောက်ဆုံးမှ ထပ်တိုးမေးခွန်းအားလုံး ပါဝင်မည်
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: PROCESS_SHEET_ID,
-      range: "'Multiple Choose'!A:G",
+      range: "'Multiple Choose'!A1:G1000",
     });
 
     const rows = response.data.values || [];
@@ -59,8 +60,12 @@ async function fetchQuestionsFromSheet() {
 
     const dataRows = rows.slice(1);
     let allQuestions = dataRows.map((row, idx) => {
-      const questionText = row[1] || '';
-      const options = [row[2], row[3], row[4], row[5]].filter(opt => opt !== undefined && opt !== '' && opt !== null);
+      const questionText = row[1] !== undefined && row[1] !== null ? String(row[1]).trim() : '';
+      
+      // Option တန်ဖိုးများသည် 0 ဖြစ်နေလျှင်ပင် မပျောက်သွားစေရန် String ပြောင်းပြီး စစ်ဆေးခြင်း
+      const options = [row[2], row[3], row[4], row[5]]
+        .filter(opt => opt !== undefined && opt !== null && String(opt).trim() !== '')
+        .map(opt => String(opt).trim());
       
       let correctAnsRaw = parseInt(row[6]) - 1;
       if (isNaN(correctAnsRaw) || correctAnsRaw < 0 || correctAnsRaw >= options.length) {
@@ -73,9 +78,12 @@ async function fetchQuestionsFromSheet() {
         options: options,
         answer: correctAnsRaw
       };
-    }).filter(q => q.question && q.options.length > 0);
+    }).filter(q => q.question !== '' && q.options.length > 0);
+
+    console.log(`Total valid questions loaded from sheet: ${allQuestions.length}`);
 
     shuffleArray(allQuestions);
+    // မေးခွန်း စုစုပေါင်း ၆၀ ရှိလျှင် ၆၀ လုံး အပြည့်ယူမည်
     const selectedQuestions = allQuestions.slice(0, 60);
 
     return selectedQuestions.map((q, index) => ({
@@ -101,7 +109,7 @@ const handleGetQuestions = async (req, res) => {
     }));
 
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.json({ success: true, questions: sanitized });
+    res.json({ success: true, totalLoaded: sanitized.length, questions: sanitized });
   } catch (err) {
     console.error("Questions API Error:", err);
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -121,13 +129,25 @@ async function createDetailedExamPDF(subId, employeeName, employeeId, managerNam
   let buffers = [];
   doc.on('data', buffers.push.bind(buffers));
 
-  // Register Burmese Unicode Font (Pyidaungsu or standard TTF if available in project, fallback to standard if missing)
-  const fontPath = path.join(__dirname, 'Pyidaungsu.ttf');
-  if (fs.existsSync(fontPath)) {
-    doc.registerFont('BurmeseFont', fontPath);
-    doc.font('BurmeseFont');
-  } else {
-    // Fallback standard font if custom font file is not uploaded yet
+  // Vercel Serverless Environment တွင် path.resolve ဖြင့် Font ရှာဖွေခြင်း
+  const possibleFontPaths = [
+    path.join(__dirname, 'Pyidaungsu.ttf'),
+    path.join(process.cwd(), 'Pyidaungsu.ttf'),
+    path.resolve('Pyidaungsu.ttf')
+  ];
+
+  let fontLoaded = false;
+  for (const fPath of possibleFontPaths) {
+    if (fs.existsSync(fPath)) {
+      doc.registerFont('BurmeseFont', fPath);
+      doc.font('BurmeseFont');
+      fontLoaded = true;
+      break;
+    }
+  }
+
+  if (!fontLoaded) {
+    console.warn("Pyidaungsu.ttf not found! Falling back to Helvetica.");
     doc.font('Helvetica');
   }
   
@@ -148,16 +168,17 @@ async function createDetailedExamPDF(subId, employeeName, employeeId, managerNam
 
   detailedReview.forEach((item, idx) => {
     doc.fontSize(9).fillColor('#000000').text(`${idx + 1}. ${item.question}`);
-    doc.text(`   - Your Answer: ${item.userAnswerText} ${item.isCorrect ? '(Correct ✓)' : '(Incorrect ✗)'}`);
+    doc.fillColor(item.isCorrect ? '#16a34a' : '#dc2626')
+       .text(`   - Your Answer: ${item.userAnswerText} ${item.isCorrect ? '(Correct ✓)' : '(Incorrect ✗)'}`);
     if (!item.isCorrect) {
-      doc.text(`   - Correct Answer: ${item.correctAnswerText}`);
+      doc.fillColor('#16a34a').text(`   - Correct Answer: ${item.correctAnswerText}`);
     }
-    doc.moveDown(0.3);
+    doc.moveDown(0.4);
   });
 
   doc.end();
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     doc.on('end', async () => {
       try {
         let pdfBuffer = Buffer.concat(buffers);
@@ -177,7 +198,9 @@ async function createDetailedExamPDF(subId, employeeName, employeeId, managerNam
         resolve({ pdfBuffer, downloadLink, fileName });
       } catch (error) {
         console.error("WebDAV Upload Warning:", error.response?.data || error.message);
-        resolve({ pdfBuffer: Buffer.from([]), downloadLink: "", fileName: `${subId}_Exam_Result.pdf` });
+        const safeName = employeeName.replace(/[^a-zA-Z0-9]/g, '_') || 'Employee';
+        const safeId = employeeId.replace(/[^a-zA-Z0-9]/g, '_') || 'ID';
+        resolve({ pdfBuffer: Buffer.concat(buffers), downloadLink: "", fileName: `${safeName}_${safeId}_${subId}_Exam_Result.pdf` });
       }
     });
   });
@@ -219,7 +242,7 @@ async function handleExamSubmission(req, res) {
       subId, employeeName || 'Unknown', employeeId || 'Unknown', managerName || 'Unknown', score, questions.length, detailedReview
     );
 
-    global.pdfBufferStore[subId] = pdfBuffer;
+    global.pdfBufferStore[subId] = { buffer: pdfBuffer, fileName: fileName };
 
     const sheets = google.sheets({ version: 'v4', auth });
     await sheets.spreadsheets.values.append({
@@ -250,13 +273,14 @@ async function handleExamSubmission(req, res) {
 
 app.get('/api/download-pdf/:subId', (req, res) => {
   const { subId } = req.params;
-  const buffer = global.pdfBufferStore[subId];
-  if (!buffer) {
+  const record = global.pdfBufferStore[subId];
+  if (!record || !record.buffer) {
     return res.status(404).send('PDF file not found or expired.');
   }
+  const encodedFileName = encodeURIComponent(record.fileName);
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename=${subId}_Exam_Result.pdf`);
-  res.send(buffer);
+  res.setHeader('Content-Disposition', `attachment; filename="${subId}_Exam_Result.pdf"; filename*=UTF-8''${encodedFileName}`);
+  res.send(record.buffer);
 });
 
 async function handleDashboard(req, res) {
